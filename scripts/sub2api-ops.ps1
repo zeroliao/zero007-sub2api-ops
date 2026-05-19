@@ -1,5 +1,5 @@
 param(
-  [ValidateSet("inspect", "doctor", "validate", "backup", "deploy", "rollback", "status", "logs")]
+  [ValidateSet("inspect", "doctor", "validate", "backup", "deploy", "rollback", "status", "logs", "diff-server", "sync-from-server")]
   [string]$Action = "doctor",
   [string]$ConfigPath = ".env.ops"
 )
@@ -57,6 +57,7 @@ $sshKey = [Environment]::GetEnvironmentVariable("SUB2API_SSH_KEY", "Process")
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $remoteScript = Join-Path $repoRoot "remote/sub2api-remote-ops.sh"
 $composeFile = Join-Path $repoRoot "deploy/docker-compose.yml"
+$gitExe = [Environment]::GetEnvironmentVariable("SUB2API_GIT_EXE", "Process")
 
 if (-not (Test-Path -LiteralPath $remoteScript)) {
   throw "Missing remote script: $remoteScript"
@@ -64,6 +65,16 @@ if (-not (Test-Path -LiteralPath $remoteScript)) {
 
 if (-not (Test-Path -LiteralPath $composeFile)) {
   throw "Missing compose file: $composeFile"
+}
+
+if ([string]::IsNullOrWhiteSpace($gitExe)) {
+  $gitCmd = Get-Command git -ErrorAction SilentlyContinue
+  if ($gitCmd) {
+    $gitExe = $gitCmd.Source
+  }
+  elseif (Test-Path -LiteralPath "D:\Program Files\Git\cmd\git.exe") {
+    $gitExe = "D:\Program Files\Git\cmd\git.exe"
+  }
 }
 
 $target = "${userName}@${hostName}"
@@ -81,6 +92,47 @@ if ($Action -eq "inspect") {
   Invoke-Checked ($sshBase + @($target, "chmod +x '$remoteTmpScript'"))
   $remoteCommand = "SUB2API_REMOTE_DIR='$remoteDir' SUB2API_HEALTH_URL='$healthUrl' bash '$remoteTmpScript' '$Action'; rc=`$?; rm -f '$remoteTmpScript'; exit `$rc"
   Invoke-Checked ($sshBase + @($target, $remoteCommand))
+  exit 0
+}
+
+if ($Action -eq "diff-server" -or $Action -eq "sync-from-server") {
+  $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "sub2api-ops-$PID"
+  New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+  $remoteComposeTmp = "/tmp/sub2api-compose-current-$PID.yml"
+  $localRemoteCompose = Join-Path $tmpDir "docker-compose.server.yml"
+
+  try {
+    Invoke-Checked ($sshBase + @($target, "sudo cp '$remoteDir/docker-compose.yml' '$remoteComposeTmp'; sudo chown `$(id -u):`$(id -g) '$remoteComposeTmp'"))
+    Invoke-Checked ($scpBase + @("${target}:$remoteComposeTmp", $localRemoteCompose))
+    Invoke-Checked ($sshBase + @($target, "rm -f '$remoteComposeTmp'"))
+
+    if ($Action -eq "sync-from-server") {
+      Copy-Item -LiteralPath $localRemoteCompose -Destination $composeFile -Force
+      Write-Host "Synced server compose to $composeFile"
+      exit 0
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($gitExe)) {
+      & $gitExe diff --no-index -- deploy/docker-compose.yml $localRemoteCompose
+      $diffExit = $LASTEXITCODE
+      if ($diffExit -eq 0) {
+        Write-Host "No differences between local deploy/docker-compose.yml and server docker-compose.yml."
+      }
+      elseif ($diffExit -eq 1) {
+        Write-Host "Differences found between local and server compose files."
+      }
+      else {
+        throw "git diff failed with exit code $diffExit"
+      }
+    }
+    else {
+      Compare-Object (Get-Content -LiteralPath $composeFile) (Get-Content -LiteralPath $localRemoteCompose) | Out-Host
+    }
+  }
+  finally {
+    Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
   exit 0
 }
 
