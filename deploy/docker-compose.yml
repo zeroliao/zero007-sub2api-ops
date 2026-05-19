@@ -24,7 +24,7 @@ services:
   # Sub2API Application
   # ===========================================================================
   sub2api:
-    image: weishaw/sub2api@sha256:abd6d88929c474f659b0c43b45ef0ac76672c0704be2583548e6c87194252bc3
+    image: ghcr.io/zeroliao/sub2api@sha256:1966158944f0b05ff820700aec8835e6623666acf7f955abee15f44777212ab5
     container_name: sub2api
     restart: unless-stopped
     ulimits:
