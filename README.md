@@ -111,6 +111,8 @@ The script creates backups under:
 
 Database backups use `pg_dump` from the running PostgreSQL container when available. If PostgreSQL is not running yet, the script still backs up configuration files and local directories.
 
+Before every source-code deployment, check whether the new image contains database migrations. If migrations include potentially irreversible operations such as `DROP TABLE`, `DROP COLUMN`, destructive `DELETE`, lossy type changes, or data backfills that cannot be recomputed, pause and warn the operator before deployment. The deployment note must include the affected migration files, expected impact, backup location, and a concrete rollback plan. Do not rely on container rollback alone for irreversible database changes.
+
 ## TODO
 
 - Add single-server blue-green deployment with Caddy traffic switching, so application releases can start the new container, pass health checks, then switch traffic with near-zero user impact.
