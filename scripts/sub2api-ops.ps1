@@ -182,6 +182,8 @@ $opsBranch = [Environment]::GetEnvironmentVariable("SUB2API_OPS_BRANCH", "Proces
 $remoteOpsDir = [Environment]::GetEnvironmentVariable("SUB2API_REMOTE_OPS_DIR", "Process")
 $remoteGitSshKey = [Environment]::GetEnvironmentVariable("SUB2API_REMOTE_GIT_SSH_KEY", "Process")
 $allowDirtyDeploy = [Environment]::GetEnvironmentVariable("SUB2API_ALLOW_DIRTY_DEPLOY", "Process")
+$runId = [Environment]::GetEnvironmentVariable("SUB2API_RUN_ID", "Process")
+$runLogTail = [Environment]::GetEnvironmentVariable("SUB2API_RUN_LOG_TAIL", "Process")
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $remoteScript = Join-Path $repoRoot "remote/sub2api-remote-ops.sh"
@@ -246,6 +248,16 @@ if ([string]::IsNullOrWhiteSpace($remoteGitSshKey)) {
   $remoteGitSshKey = "/home/$userName/.ssh/zero007_sub2api_ops_deploy"
 }
 
+$preserveEnvNames = @("SUB2API_REMOTE_DIR", "SUB2API_HEALTH_URL", "SUB2API_PROJECT_NAME", "SUB2API_RUN_ID", "SUB2API_RUN_LOG_TAIL")
+
+if (-not [string]::IsNullOrWhiteSpace($runId)) {
+  [Environment]::SetEnvironmentVariable("SUB2API_RUN_ID", $runId, "Process")
+}
+
+if (-not [string]::IsNullOrWhiteSpace($runLogTail)) {
+  [Environment]::SetEnvironmentVariable("SUB2API_RUN_LOG_TAIL", $runLogTail, "Process")
+}
+
 if ($Action -eq "inspect") {
   $remoteTmpScript = "/tmp/sub2api-remote-ops-$PID.sh"
   Invoke-Checked ($scpBase + @($remoteScript, "${target}:$remoteTmpScript"))
@@ -303,7 +315,7 @@ if ($useGitBackedDeployment -and $allowDirtyDeploy -ne "true") {
 
   $candidateCompose = "$remoteOpsDir/deploy/docker-compose.yml"
   $remoteScriptFromGit = "$remoteOpsDir/remote/sub2api-remote-ops.sh"
-  $remoteCommand = "sudo --preserve-env=SUB2API_REMOTE_DIR,SUB2API_HEALTH_URL,SUB2API_CANDIDATE_COMPOSE,SUB2API_PROJECT_NAME SUB2API_REMOTE_DIR='$remoteDir' SUB2API_HEALTH_URL='$healthUrl' SUB2API_PROJECT_NAME='$projectName' SUB2API_CANDIDATE_COMPOSE='$candidateCompose' bash '$remoteScriptFromGit' '$Action'"
+  $remoteCommand = "sudo --preserve-env=$(($preserveEnvNames + @("SUB2API_CANDIDATE_COMPOSE")) -join ',') SUB2API_REMOTE_DIR='$remoteDir' SUB2API_HEALTH_URL='$healthUrl' SUB2API_PROJECT_NAME='$projectName' SUB2API_CANDIDATE_COMPOSE='$candidateCompose' bash '$remoteScriptFromGit' '$Action'"
   Invoke-Checked ($sshBase + @($target, $remoteCommand))
   exit 0
 }
@@ -320,10 +332,10 @@ if ($Action -eq "deploy" -or $Action -eq "bluegreen-deploy" -or $Action -eq "sta
   $remoteTmpCompose = "/tmp/sub2api-compose-$PID.yml"
   Invoke-Checked ($scpBase + @($composeFile, "${target}:$remoteTmpCompose"))
   Invoke-Checked ($sshBase + @($target, "sudo cp '$remoteTmpCompose' '$remoteDir/.ops/docker-compose.candidate.yml'; rm -f '$remoteTmpCompose'"))
-  $remoteCommand = "sudo --preserve-env=SUB2API_REMOTE_DIR,SUB2API_HEALTH_URL,SUB2API_CANDIDATE_COMPOSE,SUB2API_PROJECT_NAME SUB2API_REMOTE_DIR='$remoteDir' SUB2API_HEALTH_URL='$healthUrl' SUB2API_PROJECT_NAME='$projectName' SUB2API_CANDIDATE_COMPOSE='$remoteDir/.ops/docker-compose.candidate.yml' bash '$remoteDir/.ops/sub2api-remote-ops.sh' '$Action'"
+  $remoteCommand = "sudo --preserve-env=$(($preserveEnvNames + @("SUB2API_CANDIDATE_COMPOSE")) -join ',') SUB2API_REMOTE_DIR='$remoteDir' SUB2API_HEALTH_URL='$healthUrl' SUB2API_PROJECT_NAME='$projectName' SUB2API_CANDIDATE_COMPOSE='$remoteDir/.ops/docker-compose.candidate.yml' bash '$remoteDir/.ops/sub2api-remote-ops.sh' '$Action'"
 }
 else {
-  $remoteCommand = "sudo --preserve-env=SUB2API_REMOTE_DIR,SUB2API_HEALTH_URL,SUB2API_PROJECT_NAME SUB2API_REMOTE_DIR='$remoteDir' SUB2API_HEALTH_URL='$healthUrl' SUB2API_PROJECT_NAME='$projectName' bash '$remoteDir/.ops/sub2api-remote-ops.sh' '$Action'"
+  $remoteCommand = "sudo --preserve-env=$($preserveEnvNames -join ',') SUB2API_REMOTE_DIR='$remoteDir' SUB2API_HEALTH_URL='$healthUrl' SUB2API_PROJECT_NAME='$projectName' bash '$remoteDir/.ops/sub2api-remote-ops.sh' '$Action'"
 }
 
 Invoke-Checked ($sshBase + @($target, $remoteCommand))

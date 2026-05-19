@@ -722,13 +722,19 @@ latest_run_dir() {
     run_dir="$RUNS_DIR/$run"
   fi
 
-  [ -n "$run_dir" ] && [ -d "$run_dir" ] || fail "Deploy run was not found: $run"
+  [ -n "$run_dir" ] && [ -d "$run_dir" ] || return 1
   printf '%s\n' "$run_dir"
 }
 
 run_status() {
   local run_dir status pid exit_code started_at finished_at action
-  run_dir="$(latest_run_dir)"
+  run_dir="$(latest_run_dir || true)"
+  if [ -z "$run_dir" ]; then
+    printf 'status=none\n'
+    printf 'runs_dir=%s\n' "$RUNS_DIR"
+    return 0
+  fi
+
   action="$(cat "$run_dir/action" 2>/dev/null || true)"
   status="$(cat "$run_dir/status" 2>/dev/null || printf 'unknown')"
   pid="$(cat "$run_dir/pid" 2>/dev/null || true)"
@@ -748,8 +754,13 @@ run_status() {
 
 run_logs() {
   local run_dir tail_lines
-  run_dir="$(latest_run_dir)"
+  run_dir="$(latest_run_dir || true)"
   tail_lines="${SUB2API_RUN_LOG_TAIL:-200}"
+  if [ -z "$run_dir" ]; then
+    log "No deploy run found."
+    return 0
+  fi
+
   if [ -f "$run_dir/run.log" ]; then
     tail -n "$tail_lines" "$run_dir/run.log"
   else
