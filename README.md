@@ -2,6 +2,8 @@
 
 This repository is an operations workspace for managing a remote Sub2API deployment from Codex.
 
+AI/Codex contributors should read [`AGENTS.md`](AGENTS.md) first for repository context, Git-backed deployment rules, and production safety boundaries.
+
 The workflow is intentionally conservative:
 
 1. Require deployment changes to be committed and pushed to GitHub.
