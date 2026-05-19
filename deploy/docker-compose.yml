@@ -24,7 +24,7 @@ services:
   # Sub2API Application
   # ===========================================================================
   sub2api:
-    image: weishaw/sub2api:latest
+    image: weishaw/sub2api@sha256:abd6d88929c474f659b0c43b45ef0ac76672c0704be2583548e6c87194252bc3
     container_name: sub2api
     restart: unless-stopped
     ulimits:
