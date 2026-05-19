@@ -1,5 +1,5 @@
 param(
-  [ValidateSet("inspect", "doctor", "validate", "validate-candidate", "backup", "deploy", "bluegreen-deploy", "active-slot", "switch-slot", "rollback", "status", "logs", "diff-server", "sync-from-server", "audit-allowlist", "validate-allowlist")]
+  [ValidateSet("inspect", "doctor", "validate", "validate-candidate", "backup", "deploy", "bluegreen-deploy", "start-deploy", "start-bluegreen-deploy", "run-status", "run-logs", "active-slot", "switch-slot", "rollback", "status", "logs", "diff-server", "sync-from-server", "audit-allowlist", "validate-allowlist")]
   [string]$Action = "doctor",
   [string]$ConfigPath = ".env.ops"
 )
@@ -215,7 +215,7 @@ if (-not [string]::IsNullOrWhiteSpace($sshKey)) {
   $scpBase += @("-i", $sshKey)
 }
 
-$gitBackedActions = @("deploy", "bluegreen-deploy", "validate-candidate")
+$gitBackedActions = @("deploy", "bluegreen-deploy", "start-deploy", "start-bluegreen-deploy", "validate-candidate")
 $useGitBackedDeployment = $gitBackedActions -contains $Action
 
 if ([string]::IsNullOrWhiteSpace($opsRepo)) {
@@ -316,7 +316,7 @@ $remoteTmpScript = "/tmp/sub2api-remote-ops-$PID.sh"
 Invoke-Checked ($scpBase + @($remoteScript, "${target}:$remoteTmpScript"))
 Invoke-Checked ($sshBase + @($target, "sudo mkdir -p '$remoteDir' '$remoteDir/.ops'; sudo cp '$remoteTmpScript' '$remoteDir/.ops/sub2api-remote-ops.sh'; sudo chmod +x '$remoteDir/.ops/sub2api-remote-ops.sh'; rm -f '$remoteTmpScript'"))
 
-if ($Action -eq "deploy" -or $Action -eq "bluegreen-deploy" -or $Action -eq "validate-candidate") {
+if ($Action -eq "deploy" -or $Action -eq "bluegreen-deploy" -or $Action -eq "start-deploy" -or $Action -eq "start-bluegreen-deploy" -or $Action -eq "validate-candidate") {
   $remoteTmpCompose = "/tmp/sub2api-compose-$PID.yml"
   Invoke-Checked ($scpBase + @($composeFile, "${target}:$remoteTmpCompose"))
   Invoke-Checked ($sshBase + @($target, "sudo cp '$remoteTmpCompose' '$remoteDir/.ops/docker-compose.candidate.yml'; rm -f '$remoteTmpCompose'"))

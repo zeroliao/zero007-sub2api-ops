@@ -56,7 +56,9 @@ git push
 .\scripts\sub2api-ops.cmd diff-server
 .\scripts\sub2api-ops.cmd validate-candidate
 .\scripts\sub2api-ops.cmd backup
-.\scripts\sub2api-ops.cmd bluegreen-deploy
+.\scripts\sub2api-ops.cmd start-bluegreen-deploy
+.\scripts\sub2api-ops.cmd run-status
+.\scripts\sub2api-ops.cmd run-logs
 .\scripts\sub2api-ops.cmd status
 ```
 
@@ -69,6 +71,8 @@ Useful read-only/status commands:
 .\scripts\sub2api-ops.cmd audit-allowlist
 .\scripts\sub2api-ops.cmd validate-allowlist
 ```
+
+Prefer `start-bluegreen-deploy` for production changes when the Codex/API control channel may be routed through the same service. It writes durable run logs under `/opt/sub2api-deploy/.ops/deploy-runs/`; use `run-status` and `run-logs` after reconnecting.
 
 ## Deployment Gates
 
@@ -85,6 +89,7 @@ The remote script fails closed for risky settings:
 ## Rollback and Backups
 
 - Backup runs before deploy and stores config plus PostgreSQL dump when PostgreSQL is running.
+- Background deployment runs store status, PID, exit code, timestamps, and logs under `/opt/sub2api-deploy/.ops/deploy-runs/`.
 - Rollback restores `.env`, `docker-compose.yml`, optional `config.yaml`, Caddy config, active slot file, and container startup state.
 - Rollback does not automatically restore the database dump.
 - Database restore from `postgres.sql` is manual and must be planned before destructive migrations.

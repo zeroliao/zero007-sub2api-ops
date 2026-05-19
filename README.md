@@ -49,6 +49,9 @@ Then ask Codex to run one of these:
 .\scripts\sub2api-ops.cmd validate-candidate
 .\scripts\sub2api-ops.cmd deploy
 .\scripts\sub2api-ops.cmd bluegreen-deploy
+.\scripts\sub2api-ops.cmd start-bluegreen-deploy
+.\scripts\sub2api-ops.cmd run-status
+.\scripts\sub2api-ops.cmd run-logs
 .\scripts\sub2api-ops.cmd active-slot
 .\scripts\sub2api-ops.cmd switch-slot
 .\scripts\sub2api-ops.cmd status
@@ -82,7 +85,9 @@ git add .
 git commit -m "feat: update deployment"
 git push
 .\scripts\sub2api-ops.cmd validate-candidate
-.\scripts\sub2api-ops.cmd bluegreen-deploy
+.\scripts\sub2api-ops.cmd start-bluegreen-deploy
+.\scripts\sub2api-ops.cmd run-status
+.\scripts\sub2api-ops.cmd run-logs
 ```
 
 For an emergency local upload only, set `SUB2API_ALLOW_DIRTY_DEPLOY=true` in `.env.ops`. Leave it `false` for normal production deployments.
@@ -200,3 +205,22 @@ Caddy is the only service bound to `${BIND_HOST}:${SERVER_PORT}`. The current sl
 ```
 
 Use `switch-slot` for a manual traffic switch and `active-slot` to print the current slot.
+
+## Background Deploy Runs
+
+Use `start-bluegreen-deploy` for production deployments when the control channel may depend on this same service. It starts the remote deployment as a background run, writes durable logs on the server, and returns a run id before traffic is switched.
+
+```powershell
+.\scripts\sub2api-ops.cmd validate-candidate
+.\scripts\sub2api-ops.cmd start-bluegreen-deploy
+.\scripts\sub2api-ops.cmd run-status
+.\scripts\sub2api-ops.cmd run-logs
+```
+
+Run data is stored on the server under:
+
+```text
+/opt/sub2api-deploy/.ops/deploy-runs/
+```
+
+`run-status` and `run-logs` read the latest run by default. Set `SUB2API_RUN_ID=<run-id>` in `.env.ops` to inspect an older run. The server keeps the latest 20 runs by default; override with `SUB2API_RUN_RETENTION=<count>` in the server `.env`.

@@ -11,6 +11,9 @@ CANDIDATE_COMPOSE="${SUB2API_CANDIDATE_COMPOSE:-}"
 MIGRATIONS_DIR="${SUB2API_MIGRATIONS_DIR:-}"
 ACTIVE_SLOT_FILE="$DEPLOY_DIR/.ops/active-slot"
 BACKUP_RETENTION="${SUB2API_BACKUP_RETENTION:-3}"
+RUNS_DIR="$DEPLOY_DIR/.ops/deploy-runs"
+RUN_RETENTION="${SUB2API_RUN_RETENTION:-20}"
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 DEFAULT_UPSTREAM_HOSTS="api.openai.com,api.anthropic.com,api.kimi.com,open.bigmodel.cn,api.minimaxi.com,generativelanguage.googleapis.com,cloudcode-pa.googleapis.com,oauth2.googleapis.com,www.googleapis.com,*.openai.azure.com"
 DEFAULT_PRICING_HOSTS="raw.githubusercontent.com"
 DEFAULT_CRS_HOSTS=""
@@ -22,6 +25,10 @@ log() {
 fail() {
   log "ERROR: $*"
   exit 1
+}
+
+shell_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\"'\"'/g")"
 }
 
 compose_file() {
@@ -333,7 +340,7 @@ acquire_lock() {
 }
 
 prepare_dirs() {
-  mkdir -p "$DEPLOY_DIR" "$DEPLOY_DIR/data" "$DEPLOY_DIR/postgres_data" "$DEPLOY_DIR/redis_data" "$DEPLOY_DIR/backups" "$DEPLOY_DIR/caddy" "$DEPLOY_DIR/caddy_data" "$DEPLOY_DIR/caddy_config" "$DEPLOY_DIR/.ops"
+  mkdir -p "$DEPLOY_DIR" "$DEPLOY_DIR/data" "$DEPLOY_DIR/postgres_data" "$DEPLOY_DIR/redis_data" "$DEPLOY_DIR/backups" "$DEPLOY_DIR/caddy" "$DEPLOY_DIR/caddy_data" "$DEPLOY_DIR/caddy_config" "$DEPLOY_DIR/.ops" "$RUNS_DIR"
   if [ ! -f "$DEPLOY_DIR/caddy/Caddyfile" ]; then
     write_caddyfile blue
   fi
@@ -588,6 +595,166 @@ bluegreen_deploy() {
   compose stop "$(slot_service "$previous")" || true
   compose ps
   log "Blue-green deployment completed successfully. Active slot: $target."
+}
+
+prune_runs() {
+  local keep="${1:-$RUN_RETENTION}"
+  local run_dir real_runs_dir real_run_dir
+  local -a run_dirs=()
+
+  case "$keep" in
+    ''|*[!0-9]*) keep=20 ;;
+  esac
+  [ "$keep" -ge 1 ] || keep=20
+  [ -d "$RUNS_DIR" ] || return 0
+
+  real_runs_dir="$(readlink -f "$RUNS_DIR")"
+  [ -n "$real_runs_dir" ] || fail "Unable to resolve runs directory: $RUNS_DIR"
+
+  while IFS= read -r run_dir; do
+    run_dirs+=("$run_dir")
+  done < <(find "$RUNS_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
+
+  while [ "${#run_dirs[@]}" -gt "$keep" ]; do
+    run_dir="${run_dirs[0]}"
+    run_dirs=("${run_dirs[@]:1}")
+    real_run_dir="$(readlink -f "$RUNS_DIR/$run_dir")"
+
+    case "$real_run_dir" in
+      "$real_runs_dir"/*) ;;
+      *) fail "Refusing to prune run outside runs directory: $real_run_dir" ;;
+    esac
+
+    log "Pruning old deploy run: $real_run_dir"
+    rm -rf "$real_run_dir"
+  done
+}
+
+start_background_run() {
+  local target_action="$1"
+  local run_id run_dir env_file quoted_run_dir quoted_env_file quoted_compose quoted_script
+  local env_names=(
+    SUB2API_REMOTE_DIR
+    SUB2API_HEALTH_URL
+    SUB2API_COMPOSE_FILE
+    SUB2API_PROJECT_NAME
+    SUB2API_CANDIDATE_COMPOSE
+    SUB2API_BACKUP_RETENTION
+    SUB2API_RUN_RETENTION
+  )
+  local name value
+
+  prepare_dirs
+  case "$target_action" in
+    deploy|bluegreen-deploy) ;;
+    *) fail "Background runs only support deploy or bluegreen-deploy." ;;
+  esac
+
+  run_id="$(date -u '+%Y%m%dT%H%M%SZ')-$target_action-$$"
+  run_dir="$RUNS_DIR/$run_id"
+  mkdir -p "$run_dir"
+
+  printf '%s\n' "$target_action" > "$run_dir/action"
+  printf 'queued\n' > "$run_dir/status"
+  date -u '+%Y-%m-%dT%H:%M:%SZ' > "$run_dir/started-at"
+
+  env_file="$run_dir/env.sh"
+  : > "$env_file"
+  for name in "${env_names[@]}"; do
+    value="${!name:-}"
+    if [ -n "$value" ]; then
+      printf 'export %s=%s\n' "$name" "$(shell_quote "$value")" >> "$env_file"
+    fi
+  done
+
+  quoted_env_file="$(shell_quote "$env_file")"
+  quoted_run_dir="$(shell_quote "$run_dir")"
+  quoted_compose="$(shell_quote "$DEPLOY_DIR/$COMPOSE_FILE")"
+  quoted_script="$(shell_quote "$SCRIPT_PATH")"
+
+  cat > "$run_dir/runner.sh" <<EOF
+#!/usr/bin/env bash
+set -Eeuo pipefail
+run_dir=$quoted_run_dir
+cd $(shell_quote "$DEPLOY_DIR")
+source $quoted_env_file
+if [ -n "\${SUB2API_CANDIDATE_COMPOSE:-}" ] && [ -f "\$SUB2API_CANDIDATE_COMPOSE" ]; then
+  cp -a "\$SUB2API_CANDIDATE_COMPOSE" $quoted_compose
+fi
+printf 'running\n' > "\$run_dir/status"
+date -u '+%Y-%m-%dT%H:%M:%SZ' > "\$run_dir/running-at"
+set +e
+bash $quoted_script $target_action >> "\$run_dir/run.log" 2>&1
+rc=\$?
+set -e
+printf '%s\n' "\$rc" > "\$run_dir/exit-code"
+date -u '+%Y-%m-%dT%H:%M:%SZ' > "\$run_dir/finished-at"
+if [ "\$rc" -eq 0 ]; then
+  printf 'succeeded\n' > "\$run_dir/status"
+else
+  printf 'failed\n' > "\$run_dir/status"
+fi
+exit "\$rc"
+EOF
+  chmod +x "$run_dir/runner.sh"
+
+  (
+    cd "$run_dir"
+    nohup bash "$run_dir/runner.sh" >/dev/null 2>&1 &
+    printf '%s\n' "$!" > "$run_dir/pid"
+  )
+
+  ln -sfn "$run_dir" "$RUNS_DIR/latest"
+  prune_runs "$RUN_RETENTION"
+  log "Started background deploy run: $run_id"
+  log "Run directory: $run_dir"
+  log "Check status with: run-status"
+}
+
+latest_run_dir() {
+  local run="${SUB2API_RUN_ID:-latest}"
+  local run_dir
+
+  prepare_dirs
+  if [ "$run" = "latest" ]; then
+    run_dir="$(readlink -f "$RUNS_DIR/latest" 2>/dev/null || true)"
+  else
+    run_dir="$RUNS_DIR/$run"
+  fi
+
+  [ -n "$run_dir" ] && [ -d "$run_dir" ] || fail "Deploy run was not found: $run"
+  printf '%s\n' "$run_dir"
+}
+
+run_status() {
+  local run_dir status pid exit_code started_at finished_at action
+  run_dir="$(latest_run_dir)"
+  action="$(cat "$run_dir/action" 2>/dev/null || true)"
+  status="$(cat "$run_dir/status" 2>/dev/null || printf 'unknown')"
+  pid="$(cat "$run_dir/pid" 2>/dev/null || true)"
+  exit_code="$(cat "$run_dir/exit-code" 2>/dev/null || true)"
+  started_at="$(cat "$run_dir/started-at" 2>/dev/null || true)"
+  finished_at="$(cat "$run_dir/finished-at" 2>/dev/null || true)"
+
+  printf 'run_id=%s\n' "$(basename "$run_dir")"
+  printf 'action=%s\n' "${action:-unknown}"
+  printf 'status=%s\n' "$status"
+  [ -n "$pid" ] && printf 'pid=%s\n' "$pid"
+  [ -n "$exit_code" ] && printf 'exit_code=%s\n' "$exit_code"
+  [ -n "$started_at" ] && printf 'started_at=%s\n' "$started_at"
+  [ -n "$finished_at" ] && printf 'finished_at=%s\n' "$finished_at"
+  printf 'run_dir=%s\n' "$run_dir"
+}
+
+run_logs() {
+  local run_dir tail_lines
+  run_dir="$(latest_run_dir)"
+  tail_lines="${SUB2API_RUN_LOG_TAIL:-200}"
+  if [ -f "$run_dir/run.log" ]; then
+    tail -n "$tail_lines" "$run_dir/run.log"
+  else
+    log "Run log not found yet: $run_dir/run.log"
+  fi
 }
 
 rollback() {
@@ -899,6 +1066,10 @@ case "$ACTION" in
   validate) validate_compose ;;
   validate-candidate) validate_candidate_compose ;;
   backup) backup ;;
+  start-deploy) start_background_run deploy ;;
+  start-bluegreen-deploy) start_background_run bluegreen-deploy ;;
+  run-status) run_status ;;
+  run-logs) run_logs ;;
   deploy) deploy ;;
   bluegreen-deploy) bluegreen_deploy ;;
   rollback) rollback ;;
