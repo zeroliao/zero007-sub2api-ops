@@ -1,5 +1,5 @@
 param(
-  [ValidateSet("inspect", "doctor", "validate", "backup", "deploy", "rollback", "status", "logs", "diff-server", "sync-from-server")]
+  [ValidateSet("inspect", "doctor", "validate", "backup", "deploy", "rollback", "status", "logs", "diff-server", "sync-from-server", "audit-allowlist")]
   [string]$Action = "doctor",
   [string]$ConfigPath = ".env.ops"
 )

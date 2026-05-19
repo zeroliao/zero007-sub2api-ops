@@ -216,6 +216,46 @@ logs() {
   compose logs --tail="${SUB2API_LOG_TAIL:-200}" sub2api
 }
 
+audit_allowlist() {
+  load_env
+
+  log "Auditing outbound URL allowlist candidates."
+  log "This action is read-only and redacts credentials."
+
+  compose exec -T postgres psql -U "${POSTGRES_USER:-sub2api}" -d "${POSTGRES_DB:-sub2api}" -v ON_ERROR_STOP=1 <<'SQL'
+\pset tuples_only on
+\pset format unaligned
+
+select 'account_base_url|' || id || '|' || platform || '|' || type || '|' || status || '|' || coalesce(credentials->>'base_url', '')
+from accounts
+where deleted_at is null
+  and coalesce(credentials->>'base_url', '') <> ''
+order by platform, type, id;
+
+select 'proxy_host|' || id || '|' || protocol || '|' || host || '|' || port || '|' || status
+from proxies
+where deleted_at is null
+order by id;
+
+select 'setting_url|' || key || '|' || value
+from settings
+where key ilike '%url%'
+  and value is not null
+  and value <> ''
+order by key;
+SQL
+
+  cat <<'EOF'
+default_pricing_host|raw.githubusercontent.com
+default_upstream_host|api.openai.com
+default_upstream_host|api.anthropic.com
+default_upstream_host|generativelanguage.googleapis.com
+default_upstream_host|cloudcode-pa.googleapis.com
+default_upstream_host|oauth2.googleapis.com
+default_upstream_host|www.googleapis.com
+EOF
+}
+
 inspect() {
   log "Host: $(hostname)"
   log "User: $(id -un)"
@@ -248,6 +288,7 @@ inspect() {
 
 case "$ACTION" in
   inspect) inspect ;;
+  audit-allowlist) audit_allowlist ;;
   doctor) doctor ;;
   validate) validate_compose ;;
   backup) backup ;;

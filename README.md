@@ -37,6 +37,7 @@ Then ask Codex to run one of these:
 .\scripts\sub2api-ops.cmd inspect
 .\scripts\sub2api-ops.cmd diff-server
 .\scripts\sub2api-ops.cmd sync-from-server
+.\scripts\sub2api-ops.cmd audit-allowlist
 .\scripts\sub2api-ops.cmd deploy
 .\scripts\sub2api-ops.cmd status
 .\scripts\sub2api-ops.cmd logs
@@ -68,6 +69,16 @@ For first-time adoption, make the server's current compose file the GitHub basel
 ```
 
 After syncing, commit and push the changed `deploy/docker-compose.yml`.
+
+## URL Allowlist Audit
+
+Before enabling `SECURITY_URL_ALLOWLIST_ENABLED=true`, audit the hosts currently used by accounts, proxies, settings, and default pricing/upstream integrations:
+
+```powershell
+.\scripts\sub2api-ops.cmd audit-allowlist
+```
+
+Do not enable the allowlist until every required upstream host has been reviewed.
 
 Required remote `.env` values:
 
