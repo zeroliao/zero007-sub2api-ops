@@ -91,10 +91,27 @@ function Invoke-GitChecked {
     throw "Missing git executable. Install Git or set SUB2API_GIT_EXE."
   }
 
-  Write-Host ">> git $($GitArgs -join ' ')"
-  & $gitExe -C $repoRoot @GitArgs
-  if ($LASTEXITCODE -ne 0) {
-    throw "git $($GitArgs -join ' ') failed with exit code $LASTEXITCODE"
+  $maxAttempts = if ($GitArgs.Count -gt 0 -and $GitArgs[0] -eq "fetch") { 3 } else { 1 }
+  for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    if ($maxAttempts -gt 1) {
+      Write-Host ">> git [$attempt/$maxAttempts] $($GitArgs -join ' ')"
+    }
+    else {
+      Write-Host ">> git $($GitArgs -join ' ')"
+    }
+
+    & $gitExe -C $repoRoot @GitArgs
+    if ($LASTEXITCODE -eq 0) {
+      return
+    }
+
+    if ($attempt -eq $maxAttempts) {
+      throw "git $($GitArgs -join ' ') failed with exit code $LASTEXITCODE"
+    }
+
+    $delaySeconds = 5 * $attempt
+    Write-Host "Transient git failure detected; retrying in ${delaySeconds}s."
+    Start-Sleep -Seconds $delaySeconds
   }
 }
 
@@ -110,8 +127,20 @@ function Get-RequiredOpsCommit {
   }
 
   $commit = Get-GitOutput @("rev-parse", "HEAD")
-  Invoke-GitChecked @("fetch", $OpsRemote, $OpsBranch)
-  $remoteCommit = Get-GitOutput @("rev-parse", "$OpsRemote/$OpsBranch")
+  $remoteRef = "$OpsRemote/$OpsBranch"
+  $existingRemoteCommit = ""
+  try {
+    $existingRemoteCommit = Get-GitOutput @("rev-parse", $remoteRef)
+  }
+  catch {
+    $existingRemoteCommit = ""
+  }
+
+  if ($existingRemoteCommit -ne $commit) {
+    Invoke-GitChecked @("fetch", $OpsRemote, $OpsBranch)
+  }
+
+  $remoteCommit = Get-GitOutput @("rev-parse", $remoteRef)
 
   if ($commit -ne $remoteCommit) {
     throw "Refusing deployment because local HEAD ($commit) does not match $OpsRemote/$OpsBranch ($remoteCommit). Push or sync the ops repository first."
