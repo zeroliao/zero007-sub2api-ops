@@ -38,6 +38,8 @@ Then ask Codex to run one of these:
 .\scripts\sub2api-ops.cmd diff-server
 .\scripts\sub2api-ops.cmd sync-from-server
 .\scripts\sub2api-ops.cmd audit-allowlist
+.\scripts\sub2api-ops.cmd validate-allowlist
+.\scripts\sub2api-ops.cmd validate-candidate
 .\scripts\sub2api-ops.cmd deploy
 .\scripts\sub2api-ops.cmd status
 .\scripts\sub2api-ops.cmd logs
@@ -78,7 +80,13 @@ Before enabling `SECURITY_URL_ALLOWLIST_ENABLED=true`, audit the hosts currently
 .\scripts\sub2api-ops.cmd audit-allowlist
 ```
 
-Do not enable the allowlist until every required upstream host has been reviewed.
+Then run the read-only preflight against the candidate `SECURITY_URL_ALLOWLIST_*` values from the server `.env`:
+
+```powershell
+.\scripts\sub2api-ops.cmd validate-allowlist
+```
+
+Do not enable the allowlist until both commands pass and every required upstream host has been reviewed.
 
 Required remote `.env` values:
 

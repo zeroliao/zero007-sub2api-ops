@@ -139,7 +139,10 @@ services:
       # Allow private IP addresses for upstream/pricing/CRS (for internal deployments)
       - SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS=${SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS:-false}
       # Upstream hosts whitelist (comma-separated, only used when enabled=true)
-      - SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS=${SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS:-}
+      - SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS=${SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS:-api.openai.com,api.anthropic.com,api.kimi.com,open.bigmodel.cn,api.minimaxi.com,generativelanguage.googleapis.com,cloudcode-pa.googleapis.com,oauth2.googleapis.com,www.googleapis.com,*.openai.azure.com}
+      # Pricing/CRS hosts whitelist (comma-separated, only used when enabled=true)
+      - SECURITY_URL_ALLOWLIST_PRICING_HOSTS=${SECURITY_URL_ALLOWLIST_PRICING_HOSTS:-raw.githubusercontent.com}
+      - SECURITY_URL_ALLOWLIST_CRS_HOSTS=${SECURITY_URL_ALLOWLIST_CRS_HOSTS:-}
 
       # =======================================================================
       # Update Configuration (在线更新配置)

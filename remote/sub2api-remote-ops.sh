@@ -8,6 +8,9 @@ COMPOSE_FILE="${SUB2API_COMPOSE_FILE:-docker-compose.yml}"
 PROJECT_NAME="${SUB2API_PROJECT_NAME:-sub2api}"
 LOCK_DIR="/tmp/${PROJECT_NAME}-deploy.lock"
 CANDIDATE_COMPOSE="${SUB2API_CANDIDATE_COMPOSE:-}"
+DEFAULT_UPSTREAM_HOSTS="api.openai.com,api.anthropic.com,api.kimi.com,open.bigmodel.cn,api.minimaxi.com,generativelanguage.googleapis.com,cloudcode-pa.googleapis.com,oauth2.googleapis.com,www.googleapis.com,*.openai.azure.com"
+DEFAULT_PRICING_HOSTS="raw.githubusercontent.com"
+DEFAULT_CRS_HOSTS=""
 
 log() {
   printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"
@@ -216,6 +219,177 @@ logs() {
   compose logs --tail="${SUB2API_LOG_TAIL:-200}" sub2api
 }
 
+trim() {
+  local value="$*"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+host_from_url() {
+  local raw="$1"
+  raw="$(trim "$raw")"
+  [ -n "$raw" ] || return 1
+
+  case "$raw" in
+    http://*|https://*) ;;
+    *) return 1 ;;
+  esac
+
+  raw="${raw#*://}"
+  raw="${raw%%/*}"
+  raw="${raw%%\?*}"
+  raw="${raw%%#*}"
+  raw="${raw%@*}"
+
+  if [ "${raw#\[}" != "$raw" ]; then
+    raw="${raw#\[}"
+    raw="${raw%%\]*}"
+  else
+    raw="${raw%%:*}"
+  fi
+
+  raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+  [ -n "$raw" ] || return 1
+  printf '%s' "$raw"
+}
+
+scheme_from_url() {
+  local raw="$1"
+  raw="$(trim "$raw")"
+  case "$raw" in
+    http://*) printf 'http' ;;
+    https://*) printf 'https' ;;
+    *) return 1 ;;
+  esac
+}
+
+host_matches_allowlist() {
+  local host="$1"
+  local allowlist="$2"
+  local entry suffix
+
+  host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+  IFS=',' read -r -a entries <<< "$allowlist"
+  for entry in "${entries[@]}"; do
+    entry="$(trim "$entry")"
+    entry="$(printf '%s' "$entry" | tr '[:upper:]' '[:lower:]')"
+    [ -n "$entry" ] || continue
+    entry="${entry%%:*}"
+
+    if [ "${entry#\*.}" != "$entry" ]; then
+      suffix="${entry#*.}"
+      if [ "$host" = "$suffix" ] || [ "${host%.$suffix}" != "$host" ]; then
+        return 0
+      fi
+      continue
+    fi
+
+    if [ "$host" = "$entry" ]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+is_private_host() {
+  local host="$1"
+  host="$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+
+  case "$host" in
+    localhost|*.localhost|0.0.0.0|127.*|10.*|192.168.*|169.254.*) return 0 ;;
+    172.16.*|172.17.*|172.18.*|172.19.*|172.20.*|172.21.*|172.22.*|172.23.*|172.24.*|172.25.*|172.26.*|172.27.*|172.28.*|172.29.*|172.30.*|172.31.*) return 0 ;;
+    ::1|fc*|fd*|fe80:*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_allowlist_url() {
+  local label="$1"
+  local raw="$2"
+  local allowlist="$3"
+  local allow_http="$4"
+  local allow_private="$5"
+  local scheme host
+
+  scheme="$(scheme_from_url "$raw" 2>/dev/null || true)"
+  host="$(host_from_url "$raw" 2>/dev/null || true)"
+
+  if [ -z "$scheme" ] || [ -z "$host" ]; then
+    log "ALLOWLIST_BLOCK invalid_url|$label|$raw"
+    return 1
+  fi
+
+  if [ "$scheme" = "http" ] && [ "$allow_http" != "true" ]; then
+    log "ALLOWLIST_BLOCK insecure_http|$label|$raw"
+    return 1
+  fi
+
+  if [ "$allow_private" != "true" ] && is_private_host "$host"; then
+    log "ALLOWLIST_BLOCK private_host|$label|$raw"
+    return 1
+  fi
+
+  if ! host_matches_allowlist "$host" "$allowlist"; then
+    log "ALLOWLIST_BLOCK host_not_allowed|$label|$host|$raw"
+    return 1
+  fi
+
+  log "ALLOWLIST_OK $label|$host"
+  return 0
+}
+
+validate_allowlist() {
+  load_env
+
+  local upstream_hosts pricing_hosts crs_hosts allow_http allow_private failed line label raw
+  upstream_hosts="${SECURITY_URL_ALLOWLIST_UPSTREAM_HOSTS:-$DEFAULT_UPSTREAM_HOSTS}"
+  pricing_hosts="${SECURITY_URL_ALLOWLIST_PRICING_HOSTS:-$DEFAULT_PRICING_HOSTS}"
+  crs_hosts="${SECURITY_URL_ALLOWLIST_CRS_HOSTS:-$DEFAULT_CRS_HOSTS}"
+  allow_http="${SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP:-false}"
+  allow_private="${SECURITY_URL_ALLOWLIST_ALLOW_PRIVATE_HOSTS:-false}"
+  failed=0
+
+  log "Validating URL allowlist candidates against current server data."
+  log "This action is read-only and redacts credentials."
+  log "Candidate upstream hosts: $upstream_hosts"
+  log "Candidate pricing hosts: $pricing_hosts"
+  log "Candidate CRS hosts: ${crs_hosts:-<empty>}"
+  log "Allow insecure HTTP: $allow_http"
+  log "Allow private hosts: $allow_private"
+
+  while IFS='|' read -r label raw; do
+    [ -n "${label:-}" ] || continue
+    validate_allowlist_url "$label" "$raw" "$upstream_hosts" "$allow_http" "$allow_private" || failed=1
+  done < <(
+    compose exec -T postgres psql -qAt -U "${POSTGRES_USER:-sub2api}" -d "${POSTGRES_DB:-sub2api}" -v ON_ERROR_STOP=1 <<'SQL'
+select 'account_base_url:' || id || ':' || platform || ':' || type || ':' || status || '|' || coalesce(credentials->>'base_url', '')
+from accounts
+where deleted_at is null
+  and coalesce(credentials->>'base_url', '') <> ''
+order by platform, type, id;
+
+select 'setting_url:' || key || '|' || value
+from settings
+where key ilike '%url%'
+  and value is not null
+  and value <> ''
+  and value ~* '^https?://'
+order by key;
+SQL
+  )
+
+  validate_allowlist_url "pricing_remote_url" "${PRICING_REMOTE_URL:-https://raw.githubusercontent.com/Wei-Shaw/model-price-repo/main/model_prices_and_context_window.json}" "$pricing_hosts" "$allow_http" "$allow_private" || failed=1
+  validate_allowlist_url "pricing_hash_url" "${PRICING_HASH_URL:-https://raw.githubusercontent.com/Wei-Shaw/model-price-repo/main/model_prices_and_context_window.sha256}" "$pricing_hosts" "$allow_http" "$allow_private" || failed=1
+
+  if [ "$failed" -ne 0 ]; then
+    fail "URL allowlist validation failed. Update SECURITY_URL_ALLOWLIST_* candidates before enabling the allowlist."
+  fi
+
+  log "URL allowlist validation passed."
+}
+
 audit_allowlist() {
   load_env
 
@@ -232,10 +406,20 @@ where deleted_at is null
   and coalesce(credentials->>'base_url', '') <> ''
 order by platform, type, id;
 
+select 'account_count|' || platform || '|' || type || '|' || status || '|' || count(*)
+from accounts
+where deleted_at is null
+group by platform, type, status
+order by platform, type, status;
+
 select 'proxy_host|' || id || '|' || protocol || '|' || host || '|' || port || '|' || status
 from proxies
 where deleted_at is null
 order by id;
+
+select 'proxy_count|' || count(*)
+from proxies
+where deleted_at is null;
 
 select 'setting_url|' || key || '|' || value
 from settings
@@ -243,16 +427,23 @@ where key ilike '%url%'
   and value is not null
   and value <> ''
 order by key;
+
+select 'settings_count|' || count(*)
+from settings;
 SQL
 
   cat <<'EOF'
 default_pricing_host|raw.githubusercontent.com
 default_upstream_host|api.openai.com
 default_upstream_host|api.anthropic.com
+default_upstream_host|api.kimi.com
+default_upstream_host|open.bigmodel.cn
+default_upstream_host|api.minimaxi.com
 default_upstream_host|generativelanguage.googleapis.com
 default_upstream_host|cloudcode-pa.googleapis.com
 default_upstream_host|oauth2.googleapis.com
 default_upstream_host|www.googleapis.com
+default_upstream_host|*.openai.azure.com
 EOF
 }
 
@@ -289,8 +480,10 @@ inspect() {
 case "$ACTION" in
   inspect) inspect ;;
   audit-allowlist) audit_allowlist ;;
+  validate-allowlist) validate_allowlist ;;
   doctor) doctor ;;
   validate) validate_compose ;;
+  validate-candidate) validate_candidate_compose ;;
   backup) backup ;;
   deploy) deploy ;;
   rollback) rollback ;;

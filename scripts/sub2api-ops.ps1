@@ -1,5 +1,5 @@
 param(
-  [ValidateSet("inspect", "doctor", "validate", "backup", "deploy", "rollback", "status", "logs", "diff-server", "sync-from-server", "audit-allowlist")]
+  [ValidateSet("inspect", "doctor", "validate", "validate-candidate", "backup", "deploy", "rollback", "status", "logs", "diff-server", "sync-from-server", "audit-allowlist", "validate-allowlist")]
   [string]$Action = "doctor",
   [string]$ConfigPath = ".env.ops"
 )
@@ -37,10 +37,31 @@ function Require-Value {
 
 function Invoke-Checked {
   param([string[]]$Command)
-  Write-Host ">> $($Command -join ' ')"
-  & $Command[0] @($Command | Select-Object -Skip 1)
-  if ($LASTEXITCODE -ne 0) {
-    throw "Command failed with exit code ${LASTEXITCODE}: $($Command -join ' ')"
+
+  $commandName = Split-Path -Leaf $Command[0]
+  $isNetworkCommand = $commandName -in @("ssh", "ssh.exe", "scp", "scp.exe")
+  $maxAttempts = if ($isNetworkCommand) { 3 } else { 1 }
+
+  for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    if ($maxAttempts -gt 1) {
+      Write-Host ">> [$attempt/$maxAttempts] $($Command -join ' ')"
+    }
+    else {
+      Write-Host ">> $($Command -join ' ')"
+    }
+
+    & $Command[0] @($Command | Select-Object -Skip 1)
+    if ($LASTEXITCODE -eq 0) {
+      return
+    }
+
+    if (-not $isNetworkCommand -or $LASTEXITCODE -ne 255 -or $attempt -eq $maxAttempts) {
+      throw "Command failed with exit code ${LASTEXITCODE}: $($Command -join ' ')"
+    }
+
+    $delaySeconds = 5 * $attempt
+    Write-Host "Transient SSH/SCP failure detected; retrying in ${delaySeconds}s."
+    Start-Sleep -Seconds $delaySeconds
   }
 }
 
@@ -140,7 +161,7 @@ $remoteTmpScript = "/tmp/sub2api-remote-ops-$PID.sh"
 Invoke-Checked ($scpBase + @($remoteScript, "${target}:$remoteTmpScript"))
 Invoke-Checked ($sshBase + @($target, "sudo mkdir -p '$remoteDir' '$remoteDir/.ops'; sudo cp '$remoteTmpScript' '$remoteDir/.ops/sub2api-remote-ops.sh'; sudo chmod +x '$remoteDir/.ops/sub2api-remote-ops.sh'; rm -f '$remoteTmpScript'"))
 
-if ($Action -eq "deploy") {
+if ($Action -eq "deploy" -or $Action -eq "validate-candidate") {
   $remoteTmpCompose = "/tmp/sub2api-compose-$PID.yml"
   Invoke-Checked ($scpBase + @($composeFile, "${target}:$remoteTmpCompose"))
   Invoke-Checked ($sshBase + @($target, "sudo cp '$remoteTmpCompose' '$remoteDir/.ops/docker-compose.candidate.yml'; rm -f '$remoteTmpCompose'"))
