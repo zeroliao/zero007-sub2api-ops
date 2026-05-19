@@ -8,6 +8,9 @@ COMPOSE_FILE="${SUB2API_COMPOSE_FILE:-docker-compose.yml}"
 PROJECT_NAME="${SUB2API_PROJECT_NAME:-sub2api}"
 LOCK_DIR="/tmp/${PROJECT_NAME}-deploy.lock"
 CANDIDATE_COMPOSE="${SUB2API_CANDIDATE_COMPOSE:-}"
+MIGRATIONS_DIR="${SUB2API_MIGRATIONS_DIR:-}"
+ACTIVE_SLOT_FILE="$DEPLOY_DIR/.ops/active-slot"
+BACKUP_RETENTION="${SUB2API_BACKUP_RETENTION:-3}"
 DEFAULT_UPSTREAM_HOSTS="api.openai.com,api.anthropic.com,api.kimi.com,open.bigmodel.cn,api.minimaxi.com,generativelanguage.googleapis.com,cloudcode-pa.googleapis.com,oauth2.googleapis.com,www.googleapis.com,*.openai.azure.com"
 DEFAULT_PRICING_HOSTS="raw.githubusercontent.com"
 DEFAULT_CRS_HOSTS=""
@@ -21,14 +24,21 @@ fail() {
   exit 1
 }
 
-compose() {
+compose_file() {
+  local file="$1"
+  shift
+
   if docker compose version >/dev/null 2>&1; then
-    docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" "$@"
+    docker compose -p "$PROJECT_NAME" -f "$file" "$@"
   elif command -v docker-compose >/dev/null 2>&1; then
-    docker-compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" "$@"
+    docker-compose -p "$PROJECT_NAME" -f "$file" "$@"
   else
     fail "Missing Docker Compose. Install Docker Compose v2 or docker-compose v1."
   fi
+}
+
+compose() {
+  compose_file "$COMPOSE_FILE" "$@"
 }
 
 require_cmd() {
@@ -46,7 +56,7 @@ load_env() {
 
 validate_env() {
   local missing=0
-  local required=(POSTGRES_PASSWORD JWT_SECRET TOTP_ENCRYPTION_KEY)
+  local required=(POSTGRES_PASSWORD JWT_SECRET TOTP_ENCRYPTION_KEY REDIS_PASSWORD)
 
   for key in "${required[@]}"; do
     if [ -z "${!key:-}" ]; then
@@ -60,25 +70,258 @@ validate_env() {
     missing=1
   fi
 
+  if [ "${REDIS_PASSWORD:-}" = "change_this_secure_password" ]; then
+    log "REDIS_PASSWORD still uses the example placeholder."
+    missing=1
+  fi
+
   case "${SERVER_PORT:-8080}" in
     ''|*[!0-9]*) log "SERVER_PORT must be numeric."; missing=1 ;;
   esac
 
+  case "$BACKUP_RETENTION" in
+    ''|*[!0-9]*) log "SUB2API_BACKUP_RETENTION must be numeric."; missing=1 ;;
+    *) [ "$BACKUP_RETENTION" -ge 1 ] || { log "SUB2API_BACKUP_RETENTION must be at least 1."; missing=1; } ;;
+  esac
+
+  if [ "${BIND_HOST:-127.0.0.1}" = "0.0.0.0" ] && [ "${SUB2API_ALLOW_PUBLIC_BIND:-false}" != "true" ]; then
+    log "BIND_HOST=0.0.0.0 requires SUB2API_ALLOW_PUBLIC_BIND=true."
+    missing=1
+  fi
+
+  if ! find "$DEPLOY_DIR/postgres_data" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .; then
+    if [ -z "${ADMIN_PASSWORD:-}" ]; then
+      log "ADMIN_PASSWORD is required for first deployment when postgres_data is empty."
+      missing=1
+    fi
+  fi
+
   [ "$missing" -eq 0 ] || fail "Environment validation failed."
+}
+
+prune_backups() {
+  local keep="${1:-$BACKUP_RETENTION}"
+  local backups_dir="$DEPLOY_DIR/backups"
+  local backup_dir real_backups_dir real_backup_dir
+  local -a backup_dirs=()
+
+  [ -d "$backups_dir" ] || return 0
+  real_backups_dir="$(readlink -f "$backups_dir")"
+  [ -n "$real_backups_dir" ] || fail "Unable to resolve backups directory: $backups_dir"
+
+  while IFS= read -r backup_dir; do
+    backup_dirs+=("$backup_dir")
+  done < <(find "$backups_dir" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
+
+  while [ "${#backup_dirs[@]}" -gt "$keep" ]; do
+    backup_dir="${backup_dirs[0]}"
+    backup_dirs=("${backup_dirs[@]:1}")
+    real_backup_dir="$(readlink -f "$backups_dir/$backup_dir")"
+
+    case "$real_backup_dir" in
+      "$real_backups_dir"/*) ;;
+      *) fail "Refusing to prune backup outside backups directory: $real_backup_dir" ;;
+    esac
+
+    log "Pruning old backup: $real_backup_dir"
+    rm -rf "$real_backup_dir"
+  done
+}
+
+validate_image_pins() {
+  local file="$1"
+  local missing=0
+  local config service image
+  local found_caddy=0
+  local found_blue=0
+  local found_green=0
+  local found_postgres=0
+  local found_redis=0
+
+  config="$(compose_file "$file" --profile bluegreen config)"
+  while IFS='|' read -r service image; do
+    case "$service" in
+      caddy) found_caddy=1 ;;
+      sub2api-blue) found_blue=1 ;;
+      sub2api-green) found_green=1 ;;
+      postgres) found_postgres=1 ;;
+      redis) found_redis=1 ;;
+      *) continue ;;
+    esac
+
+    if [ "${image#*@sha256:}" = "$image" ]; then
+      log "Service '$service' image is not pinned by digest: $image"
+      missing=1
+    fi
+  done < <(
+    printf '%s\n' "$config" | awk '
+      /^[[:space:]]{2}[A-Za-z0-9_.-]+:$/ {
+        service=$1
+        sub(":", "", service)
+      }
+      /^[[:space:]]{4}image:/ {
+        print service "|" $2
+      }
+    '
+  )
+
+  [ "$found_caddy" -eq 1 ] || { log "Missing compose service image: caddy"; missing=1; }
+  [ "$found_blue" -eq 1 ] || { log "Missing compose service image: sub2api-blue"; missing=1; }
+  [ "$found_green" -eq 1 ] || { log "Missing compose service image: sub2api-green"; missing=1; }
+  [ "$found_postgres" -eq 1 ] || { log "Missing compose service image: postgres"; missing=1; }
+  [ "$found_redis" -eq 1 ] || { log "Missing compose service image: redis"; missing=1; }
+
+  [ "$missing" -eq 0 ] || fail "Compose image pin validation failed."
+}
+
+compose_service_image() {
+  local file="$1"
+  local target_service="$2"
+
+  compose_file "$file" config | awk -v target="$target_service" '
+    /^[[:space:]]{2}[A-Za-z0-9_.-]+:$/ {
+      service=$1
+      sub(":", "", service)
+    }
+    /^[[:space:]]{4}image:/ && service == target {
+      print $2
+      exit
+    }
+  '
+}
+
+applied_migrations_file() {
+  local out="$1"
+  : > "$out"
+
+  if compose ps --status running postgres >/dev/null 2>&1; then
+    compose exec -T postgres psql -qAt -U "${POSTGRES_USER:-sub2api}" -d "${POSTGRES_DB:-sub2api}" -v ON_ERROR_STOP=1 \
+      -c "select filename from schema_migrations order by filename" > "$out" 2>/dev/null || true
+  fi
+}
+
+scan_migration_dir() {
+  local scan_dir="$1"
+  local applied_file="$2"
+  local findings_file="$3"
+  local file name
+
+  while IFS= read -r -d '' file; do
+    name="$(basename "$file")"
+    if grep -Fxq "$name" "$applied_file"; then
+      continue
+    fi
+
+    grep -Ein '\bDROP[[:space:]]+TABLE\b|\bDROP[[:space:]]+COLUMN\b|\bDELETE[[:space:]]+FROM\b|\bALTER[[:space:]]+TYPE\b|\bALTER[[:space:]]+TABLE\b.*\bALTER[[:space:]]+COLUMN\b.*\bTYPE\b' "$file" >> "$findings_file" || true
+  done < <(find "$scan_dir" -type f -name '*.sql' -print0 | sort -z)
+}
+
+require_destructive_migration_confirmation() {
+  local findings_file="$1"
+
+  if [ ! -s "$findings_file" ]; then
+    return 0
+  fi
+
+  log "Potential destructive unapplied migrations detected:"
+  cat "$findings_file"
+
+  if [ "${SUB2API_DESTRUCTIVE_MIGRATION_CONFIRMED:-false}" != "true" ] || [ -z "${SUB2API_DESTRUCTIVE_MIGRATION_NOTE:-}" ]; then
+    log "Destructive migrations require SUB2API_DESTRUCTIVE_MIGRATION_CONFIRMED=true and a non-empty SUB2API_DESTRUCTIVE_MIGRATION_NOTE."
+    return 1
+  fi
+
+  log "Destructive migration confirmation: $SUB2API_DESTRUCTIVE_MIGRATION_NOTE"
+  return 0
+}
+
+validate_destructive_migrations() {
+  local scan_dir="${MIGRATIONS_DIR:-$DEPLOY_DIR/.ops/migrations}"
+  local applied_file findings_file
+
+  if [ ! -d "$scan_dir" ]; then
+    log "Migration source directory not found; skipping source migration scan: $scan_dir"
+    return 0
+  fi
+
+  applied_file="$(mktemp)"
+  findings_file="$(mktemp)"
+  applied_migrations_file "$applied_file"
+  scan_migration_dir "$scan_dir" "$applied_file" "$findings_file"
+  if ! require_destructive_migration_confirmation "$findings_file"; then
+    rm -f "$applied_file" "$findings_file"
+    fail "Destructive migration validation failed."
+  fi
+  rm -f "$applied_file" "$findings_file"
+
+  log "Destructive migration scan passed."
+}
+
+validate_image_migrations() {
+  local file="$1"
+  local image cid tmp extracted applied_file findings_file found=0
+  image="$(compose_service_image "$file" sub2api-blue)"
+
+  [ -n "$image" ] || return 0
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    log "Sub2API image is not available locally; skipping image migration scan: $image"
+    return 0
+  fi
+
+  cid="$(docker create "$image" 2>/dev/null || true)"
+  if [ -z "$cid" ]; then
+    log "Unable to create temporary container for migration scan; skipping image scan."
+    return 0
+  fi
+
+  tmp="$(mktemp -d)"
+  applied_file="$(mktemp)"
+  findings_file="$(mktemp)"
+  applied_migrations_file "$applied_file"
+
+  for image_path in /app/migrations /app/backend/migrations /migrations; do
+    extracted="$tmp/$(basename "$image_path")"
+    if docker cp "$cid:$image_path" "$extracted" >/dev/null 2>&1; then
+      found=1
+      scan_migration_dir "$extracted" "$applied_file" "$findings_file"
+    fi
+  done
+
+  if [ "$found" -eq 0 ]; then
+    log "No migration SQL directory found inside image; image migration scan skipped."
+    docker rm "$cid" >/dev/null 2>&1 || true
+    rm -rf "$tmp" "$applied_file" "$findings_file"
+    return 0
+  fi
+
+  if ! require_destructive_migration_confirmation "$findings_file"; then
+    docker rm "$cid" >/dev/null 2>&1 || true
+    rm -rf "$tmp" "$applied_file" "$findings_file"
+    fail "Destructive migration validation failed."
+  fi
+  docker rm "$cid" >/dev/null 2>&1 || true
+  rm -rf "$tmp" "$applied_file" "$findings_file"
+  log "Image migration scan passed."
 }
 
 validate_compose() {
   load_env
+  prepare_dirs
   validate_env
   compose config >/dev/null
+  validate_image_pins "$COMPOSE_FILE"
+  validate_destructive_migrations
   log "Compose and environment validation passed."
 }
 
 validate_candidate_compose() {
   load_env
+  prepare_dirs
   validate_env
   [ -f "$CANDIDATE_COMPOSE" ] || fail "Candidate compose file was not found: $CANDIDATE_COMPOSE"
-  docker compose -p "$PROJECT_NAME" -f "$CANDIDATE_COMPOSE" config >/dev/null
+  compose_file "$CANDIDATE_COMPOSE" config >/dev/null
+  validate_image_pins "$CANDIDATE_COMPOSE"
+  validate_destructive_migrations
   log "Candidate compose validation passed: $CANDIDATE_COMPOSE"
 }
 
@@ -90,11 +333,90 @@ acquire_lock() {
 }
 
 prepare_dirs() {
-  mkdir -p "$DEPLOY_DIR" "$DEPLOY_DIR/data" "$DEPLOY_DIR/postgres_data" "$DEPLOY_DIR/redis_data" "$DEPLOY_DIR/backups"
+  mkdir -p "$DEPLOY_DIR" "$DEPLOY_DIR/data" "$DEPLOY_DIR/postgres_data" "$DEPLOY_DIR/redis_data" "$DEPLOY_DIR/backups" "$DEPLOY_DIR/caddy" "$DEPLOY_DIR/caddy_data" "$DEPLOY_DIR/caddy_config" "$DEPLOY_DIR/.ops"
+  if [ ! -f "$DEPLOY_DIR/caddy/Caddyfile" ]; then
+    write_caddyfile blue
+  fi
+  if [ ! -f "$ACTIVE_SLOT_FILE" ]; then
+    printf 'blue\n' > "$ACTIVE_SLOT_FILE"
+  fi
+}
+
+slot_service() {
+  case "$1" in
+    blue) printf 'sub2api-blue' ;;
+    green) printf 'sub2api-green' ;;
+    *) fail "Invalid slot: $1" ;;
+  esac
+}
+
+active_slot() {
+  local slot
+  slot="$(cat "$ACTIVE_SLOT_FILE" 2>/dev/null || true)"
+  case "$slot" in
+    blue|green) printf '%s\n' "$slot" ;;
+    '') printf 'blue\n' ;;
+    *) fail "Invalid active slot file value: $slot" ;;
+  esac
+}
+
+inactive_slot() {
+  case "$(active_slot)" in
+    blue) printf 'green\n' ;;
+    green) printf 'blue\n' ;;
+  esac
+}
+
+write_caddyfile() {
+  local slot="$1"
+  local service
+  service="$(slot_service "$slot")"
+  mkdir -p "$DEPLOY_DIR/caddy"
+  cat > "$DEPLOY_DIR/caddy/Caddyfile" <<EOF
+:8080 {
+	reverse_proxy $service:8080
+}
+EOF
+}
+
+reload_caddy() {
+  local caddy_container
+  caddy_container="$(compose ps -q --status running caddy 2>/dev/null || true)"
+  if [ -n "$caddy_container" ]; then
+    compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
+  else
+    compose up -d caddy
+  fi
+}
+
+stop_legacy_app_container() {
+  local cid
+  cid="$(docker ps -q --filter 'name=^/sub2api$' 2>/dev/null || true)"
+  if [ -n "$cid" ]; then
+    log "Stopping legacy single-container app before Caddy binds the public port: sub2api"
+    docker stop "$cid" >/dev/null
+  fi
+}
+
+switch_slot() {
+  local target="${1:-${SUB2API_TARGET_SLOT:-}}"
+  [ -n "$target" ] || target="$(inactive_slot)"
+  slot_service "$target" >/dev/null
+
+  log "Switching active slot to $target."
+  compose --profile bluegreen up -d "$(slot_service "$target")"
+  wait_for_service_health "$(slot_service "$target")" 36 5
+  write_caddyfile "$target"
+  stop_legacy_app_container
+  reload_caddy
+  printf '%s\n' "$target" > "$ACTIVE_SLOT_FILE"
+  wait_for_health 12 5 || fail "Caddy switched to $target, but external health check failed."
+  log "Active slot is now $target."
 }
 
 backup() {
   load_env
+  prepare_dirs
   local stamp backup_dir
   stamp="$(date -u '+%Y%m%dT%H%M%SZ')"
   backup_dir="$DEPLOY_DIR/backups/$stamp"
@@ -104,6 +426,8 @@ backup() {
   cp -a "$DEPLOY_DIR/.env" "$backup_dir/.env"
   [ -f "$DEPLOY_DIR/$COMPOSE_FILE" ] && cp -a "$DEPLOY_DIR/$COMPOSE_FILE" "$backup_dir/$COMPOSE_FILE"
   [ -f "$DEPLOY_DIR/config.yaml" ] && cp -a "$DEPLOY_DIR/config.yaml" "$backup_dir/config.yaml"
+  [ -f "$DEPLOY_DIR/caddy/Caddyfile" ] && mkdir -p "$backup_dir/caddy" && cp -a "$DEPLOY_DIR/caddy/Caddyfile" "$backup_dir/caddy/Caddyfile"
+  [ -f "$ACTIVE_SLOT_FILE" ] && mkdir -p "$backup_dir/.ops" && cp -a "$ACTIVE_SLOT_FILE" "$backup_dir/.ops/active-slot"
 
   if compose ps --status running postgres >/dev/null 2>&1; then
     log "Creating PostgreSQL dump."
@@ -113,10 +437,11 @@ backup() {
   fi
 
   if command -v tar >/dev/null 2>&1; then
-    tar -C "$DEPLOY_DIR" -czf "$backup_dir/config-and-app-data.tar.gz" .env "$COMPOSE_FILE" data 2>/dev/null || true
+    tar -C "$DEPLOY_DIR" -czf "$backup_dir/config-and-app-data.tar.gz" .env "$COMPOSE_FILE" caddy .ops/active-slot data 2>/dev/null || true
   fi
 
   ln -sfn "$backup_dir" "$DEPLOY_DIR/backups/latest"
+  prune_backups "$BACKUP_RETENTION"
   log "Backup completed."
 }
 
@@ -137,14 +462,39 @@ wait_for_health() {
   return 1
 }
 
-check_logs() {
+wait_for_service_health() {
+  local service="$1"
+  local max_attempts="${2:-30}"
+  local sleep_seconds="${3:-5}"
+  local i status container_id
+
+  for i in $(seq 1 "$max_attempts"); do
+    container_id="$(compose ps -q "$service" 2>/dev/null || true)"
+    status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
+    if [ "$status" = "healthy" ] || [ "$status" = "running" ]; then
+      log "Service health passed: $service ($status)"
+      return 0
+    fi
+    log "Service health attempt $i/$max_attempts failed for $service: ${status:-unknown}; waiting ${sleep_seconds}s."
+    sleep "$sleep_seconds"
+  done
+
+  return 1
+}
+
+check_service_logs() {
+  local service="$1"
   local bad
-  bad="$(compose logs --tail=160 sub2api 2>/dev/null | grep -Ei 'panic|fatal|database.*failed|connection refused|migration.*failed' || true)"
+  bad="$(compose logs --tail=160 "$service" 2>/dev/null | grep -Ei 'panic|fatal|database.*failed|connection refused|migration.*failed' || true)"
   if [ -n "$bad" ]; then
     printf '%s\n' "$bad"
     return 1
   fi
   return 0
+}
+
+check_logs() {
+  check_service_logs "$(slot_service "$(active_slot)")"
 }
 
 deploy() {
@@ -165,8 +515,11 @@ deploy() {
     validate_compose
   fi
 
+  stop_legacy_app_container
+
   log "Pulling latest images."
   compose pull
+  validate_image_migrations "$COMPOSE_FILE"
 
   log "Starting services."
   compose up -d
@@ -181,6 +534,62 @@ deploy() {
   log "Deployment completed successfully."
 }
 
+bluegreen_deploy() {
+  acquire_lock
+  prepare_dirs
+
+  if [ -n "$CANDIDATE_COMPOSE" ]; then
+    validate_candidate_compose
+  else
+    validate_compose
+  fi
+
+  backup
+
+  if [ -n "$CANDIDATE_COMPOSE" ]; then
+    log "Installing candidate compose file."
+    cp -a "$CANDIDATE_COMPOSE" "$DEPLOY_DIR/$COMPOSE_FILE"
+    validate_compose
+  fi
+
+  stop_legacy_app_container
+
+  log "Pulling latest images."
+  compose --profile bluegreen pull
+  validate_image_migrations "$COMPOSE_FILE"
+
+  local target target_service previous
+  previous="$(active_slot)"
+  target="$(inactive_slot)"
+  target_service="$(slot_service "$target")"
+
+  log "Starting inactive slot: $target_service"
+  compose --profile bluegreen up -d postgres redis "$target_service"
+  wait_for_service_health "$target_service" 36 5 || fail "Inactive slot failed health check: $target_service"
+  check_service_logs "$target_service" || fail "Inactive slot logs contain fatal patterns: $target_service"
+
+  log "Switching Caddy traffic from $previous to $target."
+  write_caddyfile "$target"
+  compose --profile bluegreen up -d caddy
+  reload_caddy
+  printf '%s\n' "$target" > "$ACTIVE_SLOT_FILE"
+
+  if ! wait_for_health 24 5 || ! check_service_logs "$target_service"; then
+    log "Blue-green verification failed; switching traffic back to $previous."
+    write_caddyfile "$previous"
+    compose --profile bluegreen up -d "$(slot_service "$previous")"
+    wait_for_service_health "$(slot_service "$previous")" 24 5 || true
+    reload_caddy
+    printf '%s\n' "$previous" > "$ACTIVE_SLOT_FILE"
+    fail "Blue-green deployment failed and traffic was switched back."
+  fi
+
+  log "Stopping previous slot to avoid duplicate background jobs: $(slot_service "$previous")"
+  compose stop "$(slot_service "$previous")" || true
+  compose ps
+  log "Blue-green deployment completed successfully. Active slot: $target."
+}
+
 rollback() {
   load_env
   local latest
@@ -191,6 +600,8 @@ rollback() {
   cp -a "$latest/.env" "$DEPLOY_DIR/.env"
   [ -f "$latest/$COMPOSE_FILE" ] && cp -a "$latest/$COMPOSE_FILE" "$DEPLOY_DIR/$COMPOSE_FILE"
   [ -f "$latest/config.yaml" ] && cp -a "$latest/config.yaml" "$DEPLOY_DIR/config.yaml"
+  [ -f "$latest/caddy/Caddyfile" ] && mkdir -p "$DEPLOY_DIR/caddy" && cp -a "$latest/caddy/Caddyfile" "$DEPLOY_DIR/caddy/Caddyfile"
+  [ -f "$latest/.ops/active-slot" ] && mkdir -p "$DEPLOY_DIR/.ops" && cp -a "$latest/.ops/active-slot" "$ACTIVE_SLOT_FILE"
 
   load_env
   compose up -d
@@ -216,7 +627,8 @@ status() {
 
 logs() {
   load_env
-  compose logs --tail="${SUB2API_LOG_TAIL:-200}" sub2api
+  prepare_dirs
+  compose logs --tail="${SUB2API_LOG_TAIL:-200}" caddy "$(slot_service "$(active_slot)")" postgres redis
 }
 
 trim() {
@@ -481,11 +893,14 @@ case "$ACTION" in
   inspect) inspect ;;
   audit-allowlist) audit_allowlist ;;
   validate-allowlist) validate_allowlist ;;
+  active-slot) prepare_dirs; active_slot ;;
+  switch-slot) load_env; prepare_dirs; switch_slot ;;
   doctor) doctor ;;
   validate) validate_compose ;;
   validate-candidate) validate_candidate_compose ;;
   backup) backup ;;
   deploy) deploy ;;
+  bluegreen-deploy) bluegreen_deploy ;;
   rollback) rollback ;;
   status) status ;;
   logs) logs ;;

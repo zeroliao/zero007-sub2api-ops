@@ -18,17 +18,17 @@ The user needs permission to run Docker Compose in the deployment directory.
 Recommended path:
 
 ```text
-/srv/sub2api-deploy
+/opt/sub2api-deploy
 ```
 
 The server should contain:
 
 ```text
-/srv/sub2api-deploy/.env
-/srv/sub2api-deploy/docker-compose.yml
-/srv/sub2api-deploy/data/
-/srv/sub2api-deploy/postgres_data/
-/srv/sub2api-deploy/redis_data/
+/opt/sub2api-deploy/.env
+/opt/sub2api-deploy/docker-compose.yml
+/opt/sub2api-deploy/data/
+/opt/sub2api-deploy/postgres_data/
+/opt/sub2api-deploy/redis_data/
 ```
 
 ## Required Secrets
@@ -37,6 +37,7 @@ Keep these only on the server, not in Git:
 
 ```text
 POSTGRES_PASSWORD=<secure random string>
+REDIS_PASSWORD=<secure random string>
 JWT_SECRET=<secure random string>
 TOTP_ENCRYPTION_KEY=<secure random string>
 ADMIN_EMAIL=<admin email>
@@ -44,6 +45,8 @@ ADMIN_PASSWORD=<optional, only needed for first setup>
 SERVER_PORT=8080
 TZ=Asia/Shanghai
 ```
+
+The values above are examples. Existing production values in `/opt/sub2api-deploy/.env` are the source of truth; generate or update only missing secrets.
 
 Generate secrets on Linux with:
 
@@ -62,5 +65,6 @@ PostgreSQL dump backup if database is running
 container startup
 https://api.zero007.chat/health
 recent sub2api logs for fatal patterns
+digest-pinned compose images
+destructive unapplied SQL migrations
 ```
-

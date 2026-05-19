@@ -36,11 +36,15 @@ Tracks Sub2API source changes.
 4. Build a Docker image from the source repository.
 5. Push the image to a registry.
 6. Update `deploy/docker-compose.yml` in the ops repository to use the new immutable image tag.
-7. Run `diff-server` to confirm the server compose still matches the ops baseline.
-8. Run `backup`.
-9. Run `deploy`.
-10. Verify health and logs.
-11. Commit and push both repositories.
+7. If the release includes new SQL migrations, copy them to the server migration scan directory or set `SUB2API_MIGRATIONS_DIR` to the source migration directory.
+8. Run `diff-server` to confirm the server compose still matches the ops baseline.
+9. Commit and push both repositories.
+10. Run `validate-candidate`; the server fetches the ops repository and checks out the same pushed commit.
+11. Run `backup`.
+12. Run `bluegreen-deploy` for application releases, or `deploy` for traditional all-in-place deployment.
+13. Verify health and logs.
+
+Deployment actions fail if the local ops worktree has uncommitted changes or if local `HEAD` does not match the configured remote branch. `SUB2API_ALLOW_DIRTY_DEPLOY=true` is available only for explicit emergency local uploads.
 
 ## Image Tags
 
@@ -71,3 +75,5 @@ The server keeps backups under:
 ```text
 /opt/sub2api-deploy/backups/
 ```
+
+Rollback restores config files and restarts containers. It does not automatically restore `postgres.sql`; database restores must be performed manually from the selected backup.

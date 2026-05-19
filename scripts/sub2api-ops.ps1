@@ -1,5 +1,5 @@
 param(
-  [ValidateSet("inspect", "doctor", "validate", "validate-candidate", "backup", "deploy", "rollback", "status", "logs", "diff-server", "sync-from-server", "audit-allowlist", "validate-allowlist")]
+  [ValidateSet("inspect", "doctor", "validate", "validate-candidate", "backup", "deploy", "bluegreen-deploy", "active-slot", "switch-slot", "rollback", "status", "logs", "diff-server", "sync-from-server", "audit-allowlist", "validate-allowlist")]
   [string]$Action = "doctor",
   [string]$ConfigPath = ".env.ops"
 )
@@ -65,6 +65,108 @@ function Invoke-Checked {
   }
 }
 
+function ConvertTo-ShellSingleQuoted {
+  param([string]$Value)
+  return "'" + $Value.Replace("'", "'`"`"'`"") + "'"
+}
+
+function Get-GitOutput {
+  param([string[]]$GitArgs)
+
+  if ([string]::IsNullOrWhiteSpace($gitExe)) {
+    throw "Missing git executable. Install Git or set SUB2API_GIT_EXE."
+  }
+
+  $output = & $gitExe -C $repoRoot @GitArgs 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    throw "git $($GitArgs -join ' ') failed: $($output -join "`n")"
+  }
+  return ($output -join "`n").Trim()
+}
+
+function Invoke-GitChecked {
+  param([string[]]$GitArgs)
+
+  if ([string]::IsNullOrWhiteSpace($gitExe)) {
+    throw "Missing git executable. Install Git or set SUB2API_GIT_EXE."
+  }
+
+  Write-Host ">> git $($GitArgs -join ' ')"
+  & $gitExe -C $repoRoot @GitArgs
+  if ($LASTEXITCODE -ne 0) {
+    throw "git $($GitArgs -join ' ') failed with exit code $LASTEXITCODE"
+  }
+}
+
+function Get-RequiredOpsCommit {
+  param(
+    [string]$OpsRemote,
+    [string]$OpsBranch
+  )
+
+  $status = Get-GitOutput @("status", "--porcelain")
+  if (-not [string]::IsNullOrWhiteSpace($status)) {
+    throw "Refusing Git-backed deployment with uncommitted ops changes. Commit and push first, or set SUB2API_ALLOW_DIRTY_DEPLOY=true for an explicit emergency local upload."
+  }
+
+  $commit = Get-GitOutput @("rev-parse", "HEAD")
+  Invoke-GitChecked @("fetch", $OpsRemote, $OpsBranch)
+  $remoteCommit = Get-GitOutput @("rev-parse", "$OpsRemote/$OpsBranch")
+
+  if ($commit -ne $remoteCommit) {
+    throw "Refusing deployment because local HEAD ($commit) does not match $OpsRemote/$OpsBranch ($remoteCommit). Push or sync the ops repository first."
+  }
+
+  return $commit
+}
+
+function Invoke-RemoteGitCheckout {
+  param(
+    [string]$RepoUrl,
+    [string]$Branch,
+    [string]$Commit,
+    [string]$RemoteOpsDir,
+    [string]$RemoteGitSshKey
+  )
+
+  $script = @'
+#!/usr/bin/env bash
+set -e
+repo_url="$1"
+branch="$2"
+commit="$3"
+repo_dir="$4"
+git_key="$5"
+git_ssh="ssh -i $git_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+mkdir -p "${repo_dir%/*}"
+if [ ! -d "$repo_dir/.git" ]; then
+  GIT_SSH_COMMAND="$git_ssh" git clone --no-checkout "$repo_url" "$repo_dir"
+fi
+cd "$repo_dir"
+GIT_SSH_COMMAND="$git_ssh" git remote set-url origin "$repo_url"
+GIT_SSH_COMMAND="$git_ssh" git fetch --prune origin "$branch"
+git cat-file -e "$commit^{commit}"
+git checkout --detach -f "$commit"
+chmod +x remote/sub2api-remote-ops.sh
+'@
+
+  $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "sub2api-ops-checkout-$PID"
+  $localHelper = Join-Path $tmpDir "checkout-ops.sh"
+  $remoteHelper = "/tmp/sub2api-checkout-ops-$PID.sh"
+
+  New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+  try {
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($localHelper, $script, $utf8NoBom)
+    Invoke-Checked ($scpBase + @($localHelper, "${target}:$remoteHelper"))
+    Invoke-Checked ($sshBase + @($target, "chmod +x '$remoteHelper'"))
+    Invoke-Checked ($sshBase + @($target, "bash '$remoteHelper' $(ConvertTo-ShellSingleQuoted $RepoUrl) $(ConvertTo-ShellSingleQuoted $Branch) $(ConvertTo-ShellSingleQuoted $Commit) $(ConvertTo-ShellSingleQuoted $RemoteOpsDir) $(ConvertTo-ShellSingleQuoted $RemoteGitSshKey); rc=`$?; rm -f '$remoteHelper'; exit `$rc"))
+  }
+  finally {
+    Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
 Import-DotEnv -Path $ConfigPath
 
 $hostName = Require-Value "SUB2API_SSH_HOST"
@@ -74,8 +176,14 @@ $remoteDir = Require-Value "SUB2API_REMOTE_DIR"
 $healthUrl = Require-Value "SUB2API_HEALTH_URL"
 $projectName = [Environment]::GetEnvironmentVariable("SUB2API_PROJECT_NAME", "Process")
 $sshKey = [Environment]::GetEnvironmentVariable("SUB2API_SSH_KEY", "Process")
+$opsRepo = [Environment]::GetEnvironmentVariable("SUB2API_OPS_REPO", "Process")
+$opsRemote = [Environment]::GetEnvironmentVariable("SUB2API_OPS_REMOTE", "Process")
+$opsBranch = [Environment]::GetEnvironmentVariable("SUB2API_OPS_BRANCH", "Process")
+$remoteOpsDir = [Environment]::GetEnvironmentVariable("SUB2API_REMOTE_OPS_DIR", "Process")
+$remoteGitSshKey = [Environment]::GetEnvironmentVariable("SUB2API_REMOTE_GIT_SSH_KEY", "Process")
+$allowDirtyDeploy = [Environment]::GetEnvironmentVariable("SUB2API_ALLOW_DIRTY_DEPLOY", "Process")
 
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $remoteScript = Join-Path $repoRoot "remote/sub2api-remote-ops.sh"
 $composeFile = Join-Path $repoRoot "deploy/docker-compose.yml"
 $gitExe = [Environment]::GetEnvironmentVariable("SUB2API_GIT_EXE", "Process")
@@ -105,6 +213,37 @@ $scpBase = @("scp", "-P", $port)
 if (-not [string]::IsNullOrWhiteSpace($sshKey)) {
   $sshBase += @("-i", $sshKey)
   $scpBase += @("-i", $sshKey)
+}
+
+$gitBackedActions = @("deploy", "bluegreen-deploy", "validate-candidate")
+$useGitBackedDeployment = $gitBackedActions -contains $Action
+
+if ([string]::IsNullOrWhiteSpace($opsRepo)) {
+  $opsRepo = "git@github.com:zeroliao/zero007-sub2api-ops.git"
+}
+
+if ([string]::IsNullOrWhiteSpace($opsRemote)) {
+  $opsRemote = "origin"
+}
+
+if ([string]::IsNullOrWhiteSpace($opsBranch)) {
+  if (-not [string]::IsNullOrWhiteSpace($gitExe)) {
+    $detectedBranch = Get-GitOutput @("branch", "--show-current")
+  }
+  if ([string]::IsNullOrWhiteSpace($detectedBranch)) {
+    $opsBranch = "main"
+  }
+  else {
+    $opsBranch = $detectedBranch
+  }
+}
+
+if ([string]::IsNullOrWhiteSpace($remoteOpsDir)) {
+  $remoteOpsDir = "/home/$userName/zero007-sub2api-ops"
+}
+
+if ([string]::IsNullOrWhiteSpace($remoteGitSshKey)) {
+  $remoteGitSshKey = "/home/$userName/.ssh/zero007_sub2api_ops_deploy"
 }
 
 if ($Action -eq "inspect") {
@@ -157,11 +296,27 @@ if ($Action -eq "diff-server" -or $Action -eq "sync-from-server") {
   exit 0
 }
 
+if ($useGitBackedDeployment -and $allowDirtyDeploy -ne "true") {
+  $commit = Get-RequiredOpsCommit -OpsRemote $opsRemote -OpsBranch $opsBranch
+  Write-Host "Using Git-backed ops checkout: $opsRepo @ $commit"
+  Invoke-RemoteGitCheckout -RepoUrl $opsRepo -Branch $opsBranch -Commit $commit -RemoteOpsDir $remoteOpsDir -RemoteGitSshKey $remoteGitSshKey
+
+  $candidateCompose = "$remoteOpsDir/deploy/docker-compose.yml"
+  $remoteScriptFromGit = "$remoteOpsDir/remote/sub2api-remote-ops.sh"
+  $remoteCommand = "sudo --preserve-env=SUB2API_REMOTE_DIR,SUB2API_HEALTH_URL,SUB2API_CANDIDATE_COMPOSE,SUB2API_PROJECT_NAME SUB2API_REMOTE_DIR='$remoteDir' SUB2API_HEALTH_URL='$healthUrl' SUB2API_PROJECT_NAME='$projectName' SUB2API_CANDIDATE_COMPOSE='$candidateCompose' bash '$remoteScriptFromGit' '$Action'"
+  Invoke-Checked ($sshBase + @($target, $remoteCommand))
+  exit 0
+}
+
+if ($useGitBackedDeployment -and $allowDirtyDeploy -eq "true") {
+  Write-Warning "SUB2API_ALLOW_DIRTY_DEPLOY=true is set. Falling back to emergency local upload mode."
+}
+
 $remoteTmpScript = "/tmp/sub2api-remote-ops-$PID.sh"
 Invoke-Checked ($scpBase + @($remoteScript, "${target}:$remoteTmpScript"))
 Invoke-Checked ($sshBase + @($target, "sudo mkdir -p '$remoteDir' '$remoteDir/.ops'; sudo cp '$remoteTmpScript' '$remoteDir/.ops/sub2api-remote-ops.sh'; sudo chmod +x '$remoteDir/.ops/sub2api-remote-ops.sh'; rm -f '$remoteTmpScript'"))
 
-if ($Action -eq "deploy" -or $Action -eq "validate-candidate") {
+if ($Action -eq "deploy" -or $Action -eq "bluegreen-deploy" -or $Action -eq "validate-candidate") {
   $remoteTmpCompose = "/tmp/sub2api-compose-$PID.yml"
   Invoke-Checked ($scpBase + @($composeFile, "${target}:$remoteTmpCompose"))
   Invoke-Checked ($sshBase + @($target, "sudo cp '$remoteTmpCompose' '$remoteDir/.ops/docker-compose.candidate.yml'; rm -f '$remoteTmpCompose'"))
