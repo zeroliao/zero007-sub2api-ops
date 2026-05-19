@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.ops.example
+*.log
+*.tmp
+backups/
+data/
+postgres_data/
+redis_data/
+.DS_Store
+Thumbs.db
+
