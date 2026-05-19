@@ -110,3 +110,7 @@ The script creates backups under:
 ```
 
 Database backups use `pg_dump` from the running PostgreSQL container when available. If PostgreSQL is not running yet, the script still backs up configuration files and local directories.
+
+## TODO
+
+- Add single-server blue-green deployment with Caddy traffic switching, so application releases can start the new container, pass health checks, then switch traffic with near-zero user impact.
