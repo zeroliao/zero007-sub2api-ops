@@ -74,6 +74,15 @@ Useful read-only/status commands:
 
 Prefer `start-bluegreen-deploy` for production changes when the Codex/API control channel may be routed through the same service. It writes durable run logs under `/opt/sub2api-deploy/.ops/deploy-runs/`; use `run-status` and `run-logs` after reconnecting.
 
+## Deployment Consent Rule
+
+Do not run production deployment commands unless the user explicitly asked for deployment in the same request or confirmed it after being asked.
+
+- Direct deploy is allowed when the user says things like "改完并部署", "直接部署", "自动部署", "部署到服务器", or equivalent.
+- If the user only asks to implement, fix, optimize, commit, or prepare a change, stop after local verification and ask before deployment.
+- `validate-candidate`, `doctor`, `status`, `active-slot`, `run-status`, `run-logs`, and `logs` are allowed as checks.
+- `deploy`, `bluegreen-deploy`, `start-deploy`, and `start-bluegreen-deploy` require explicit deploy intent or confirmation.
+
 ## Deployment Gates
 
 The remote script fails closed for risky settings:

@@ -92,6 +92,8 @@ git push
 
 For an emergency local upload only, set `SUB2API_ALLOW_DIRTY_DEPLOY=true` in `.env.ops`. Leave it `false` for normal production deployments.
 
+Production deployment commands require explicit user intent. If a request only asks to implement, fix, optimize, commit, or prepare changes, ask for confirmation before running `deploy`, `bluegreen-deploy`, `start-deploy`, or `start-bluegreen-deploy`. Read-only checks such as `validate-candidate`, `status`, `run-status`, and `run-logs` can be run without a deployment confirmation.
+
 Before deployment, compare the GitHub-tracked compose template with the live server compose file:
 
 ```powershell
