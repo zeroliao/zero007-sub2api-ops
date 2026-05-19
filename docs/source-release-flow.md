@@ -5,7 +5,7 @@ Use this flow when changing Sub2API application behavior, not just deployment co
 ## Repositories
 
 ```text
-C:\Users\Administrator\Desktop\code\sub2api
+C:\Users\Administrator\Desktop\code\sub2api-wrap\sub2api
 ```
 
 Ops repository:
@@ -17,7 +17,7 @@ git@github.com:zeroliao/zero007-sub2api-ops.git
 Tracks deployment scripts and the production compose baseline.
 
 ```text
-C:\Users\Administrator\Desktop\code\sub2api-src
+C:\Users\Administrator\Desktop\code\sub2api-wrap\sub2api-src
 ```
 
 Source repository:
@@ -71,4 +71,3 @@ The server keeps backups under:
 ```text
 /opt/sub2api-deploy/backups/
 ```
-
