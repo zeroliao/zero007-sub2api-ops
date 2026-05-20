@@ -21,6 +21,8 @@ v<version>
 - `release/<version>`：提测、验证和部署候选分支。
 - `v<version>`：版本成功部署后创建的 tag。
 
+`main` 不作为生产候选镜像构建入口。生产候选镜像只能来自 `sub2api-src/release/<version>`，并且必须以 immutable digest 形式进入运维仓库 compose。
+
 版本状态只使用以下 5 种：
 
 ```text
@@ -58,8 +60,8 @@ v<version>
 
 3. 提测：
    - 将对应仓库的 `dev/<version>` 同步到 `release/<version>`。
-   - 使用 `release/<version>` 构建候选镜像，并推送到 registry。
-   - 记录 immutable image digest。
+   - 推送 `sub2api-src/release/<version>` 后，由 GitHub Actions 构建候选镜像并推送到 registry。
+   - 记录 GitHub Actions 输出的 immutable image digest。
    - 运维仓库 `release/<version>` 的 compose 使用同一个 digest。
    - 本地 Docker 使用同一个 release commit、compose commit 和 image digest 验证。
    - 验证通过后，版本状态改为 `已提测`。
@@ -73,6 +75,7 @@ v<version>
    - 受影响仓库的 `release/<version>` 合入 `main`。
    - 两个仓库都打 `v<version>` tag。
    - 未改动仓库的 tag 指向本次部署实际使用的 `main` commit。
+   - `v<version>` 是部署成功后的归档点；不得用 tag 触发的新镜像替换已经本地和服务器验证通过的 digest。
    - 将最新 `main` 同步到所有 `开发中`、`已提测` 状态版本的 dev/release 分支。
 
 6. 失败：
@@ -94,6 +97,40 @@ v<version>
 - 本地验证和服务器部署使用同一个 compose commit。
 - 本地验证和服务器部署使用同一个 immutable image digest。
 - 本地验证和服务器部署使用同一组关键环境变量开关；真实密钥值可以不同。
+
+如果当前开发电脑没有 Docker，可以先提交并推送代码，由有 Docker 的机器拉取同一个 `release/<version>` commit、运维仓库同一个 compose commit 和同一个镜像 digest 继续验证。验证结果必须写入版本记录。
+
+## 节点交接信号
+
+每个节点完成后，必须留下可检查的完成信号，下一节点只根据这些信号继续：
+
+| 节点 | 完成信号 | 下一步 |
+| --- | --- | --- |
+| 创建版本 | 版本号、涉及仓库、初始 commit/tag 已写入版本记录 | 创建对应 `dev/<version>` |
+| 开发完成 | `dev/<version>` 工作区干净，commit 已完成，测试结果已记录 | 同步到 `release/<version>` |
+| 源码 release 推送 | `sub2api-src/release/<version>` 已推送到 GitHub | 等待 `GHCR Image` workflow 完成 |
+| 候选镜像构建 | GitHub Actions `GHCR Image` 成功，Summary 输出 `ghcr.io/...@sha256:<digest>` | 将 digest 写入版本记录并更新 ops compose |
+| ops release 推送 | `sub2api/release/<version>` 已推送，compose 使用同一 digest | 有 Docker 的机器开始本地 Docker 验证 |
+| 本地 Docker 验证 | 版本记录写明验证机器、source commit、ops commit、digest 和验证结果 | 状态改为 `已提测`，执行服务器侧 `validate-candidate` |
+| 服务器候选验证 | `validate-candidate` 成功 | 执行 `backup` |
+| 备份 | 备份路径和时间写入版本记录 | 执行蓝绿部署 |
+| 部署 | 健康检查、日志检查、核心路径验证通过 | 状态改为 `成功`，合入 `main` 并打 tag |
+| 发布归档 | `release.yml` 成功，GitHub Release 已创建 | 如需要，运行 `Promote Verified Image` |
+| 镜像 tag 提升 | `Promote Verified Image` 成功，Summary 显示同一 digest 的版本 tag | 记录 tag，继续同步其它未完成版本 |
+
+如果任一节点失败，停止进入下一节点；先把失败原因写入版本记录，并根据影响选择修复、重试、取消或失败回滚。
+
+## 镜像构建与发布规则
+
+- 生产候选镜像由 `sub2api-src/.github/workflows/ghcr-image.yml` 构建。
+- 自动触发条件是推送 `sub2api-src/release/<version>`；手动触发时也必须选择 `release/<version>`。
+- 候选镜像 tag 使用 `release-<version>-<short_sha>` 和 `sha-<commit>`；生产部署只能使用 `ghcr.io/...@sha256:<digest>`。
+- 候选镜像构建通过 build arg 注入版本号；如果需要更新 `backend/cmd/server/VERSION`，必须作为版本内容进入 `dev/<version>` / `release/<version>`，不能由发布归档流程在部署后向 `main` 追加 commit。
+- `main` push 不作为生产候选镜像来源，避免把尚未走版本验证的代码误用于部署。
+- 只修改运维仓库、不修改源码仓库的版本，不需要构建新应用镜像；继续使用版本记录中确认的既有 digest。
+- 部署成功后创建 `v<version>` tag；`sub2api-src/.github/workflows/release.yml` 只负责 GitHub Release 和二进制归档，不重新构建或推送 Docker 镜像。
+- 如需给已验证镜像追加版本 tag，手动运行 `sub2api-src/.github/workflows/promote-image.yml`，输入已验证 digest 和版本号。该流程只给既有 digest 打 tag，不重新 build。
+- GitHub Release、GoReleaser 归档产物或镜像版本 tag 都不能替代已验证 digest，也不能让生产 compose 切换到未经本地 Docker 和服务器验证的新镜像。
 
 本地 Docker 验证至少覆盖：
 
@@ -126,15 +163,17 @@ v<version>
 - `dev/<version>` 已同步到 `release/<version>`。
 - `release/<version>` 只包含本版本候选内容。
 - 上游同步（如有）已明确记录来源和 commit。
-- 版本状态改为 `已提测`。
+- 如涉及源码仓库，已确认推送 `sub2api-src/release/<version>` 会触发候选镜像构建。
+- 版本状态仍为 `开发中`；待本地 Docker 验证通过后再改为 `已提测`。
 
 ### 检查点 3：本地 Docker 验证
 
-- 镜像从 `sub2api-src/release/<version>` 构建。
-- 镜像已 push，并记录 immutable digest。
+- 镜像由 `sub2api-src/release/<version>` 的 GitHub Actions 构建。
+- 镜像已 push 到 registry，并记录 immutable digest。
 - `sub2api/release/<version>` compose 使用同一 digest。
 - 本地 Docker 使用同一 compose commit 和同一 digest。
 - 健康检查、日志检查和核心功能验证通过。
+- 版本状态改为 `已提测`。
 
 ### 检查点 4：生产部署前
 
@@ -149,6 +188,9 @@ v<version>
 - 两个仓库都已创建 `v<version>` tag。
 - 版本状态改为 `成功`。
 - 已记录生产部署结果、最终 commit、compose commit 和 image digest。
+- 已确认发布归档 workflow 没有向默认分支追加未经验证的 VERSION commit。
+- 已确认未用 tag 触发的新构建镜像替换已经验证通过的 digest。
+- 如需要镜像版本 tag，已使用 `Promote Verified Image` workflow 提升同一个已验证 digest。
 
 ### 检查点 6：同步其它未完成版本
 
