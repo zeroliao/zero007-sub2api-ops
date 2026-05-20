@@ -1,29 +1,29 @@
-# sub2api Ops Automation
+# sub2api 运维自动化
 
-This repository is an operations workspace for managing a remote Sub2API deployment from Codex.
+这个仓库是用于从 Codex 管理远程 Sub2API 部署的运维工作区。
 
-AI/Codex contributors should read [`AGENTS.md`](AGENTS.md) first for repository context, Git-backed deployment rules, and production safety boundaries.
+AI/Codex 贡献者应先阅读 [`AGENTS.md`](AGENTS.md)，了解仓库上下文、Git 驱动部署规则和生产安全边界。
 
-The workflow is intentionally conservative:
+当前工作流刻意保持保守：
 
-1. Require deployment changes to be committed and pushed to GitHub.
-2. Fetch the ops repository on the server and check out the same commit.
-3. Validate Docker Compose and required environment variables on the server.
-4. Create a deployment lock so two local machines cannot deploy at the same time.
-5. Back up current config and database before changing anything.
-6. Deploy with Docker Compose.
-7. Run health checks and inspect recent logs.
-8. Roll back automatically if verification fails.
+1. 部署变更必须先提交并推送到 GitHub。
+2. 服务器拉取 ops 仓库，并检出同一个 commit。
+3. 在服务器上验证 Docker Compose 和必需环境变量。
+4. 创建部署锁，防止两台本地机器同时部署。
+5. 在修改任何内容前备份当前配置和数据库。
+6. 使用 Docker Compose 部署。
+7. 执行健康检查并查看最近日志。
+8. 如果验证失败，自动回滚。
 
-## Quick Start
+## 快速开始
 
-Copy the local configuration template:
+复制本地配置模板：
 
 ```powershell
 Copy-Item .env.ops.example .env.ops
 ```
 
-Edit `.env.ops` with the server connection details:
+编辑 `.env.ops`，填写服务器连接信息：
 
 ```text
 SUB2API_SSH_HOST=api.zero007.chat
@@ -37,7 +37,7 @@ SUB2API_REMOTE_OPS_DIR=/home/your_ssh_user/zero007-sub2api-ops
 SUB2API_REMOTE_GIT_SSH_KEY=/home/your_ssh_user/.ssh/zero007_sub2api_ops_deploy
 ```
 
-Then ask Codex to run one of these:
+然后让 Codex 运行以下命令之一：
 
 ```powershell
 .\scripts\sub2api-ops.cmd doctor
@@ -59,25 +59,25 @@ Then ask Codex to run one of these:
 .\scripts\sub2api-ops.cmd rollback
 ```
 
-## Server Files
+## 服务器文件
 
-The remote server should keep secrets in:
+远程服务器应将密钥保存在：
 
 ```text
 /opt/sub2api-deploy/.env
 ```
 
-The automation will not replace `.env` unless you explicitly change the script to do so.
+自动化脚本不会替换 `.env`，除非你明确修改脚本让它这么做。
 
-## Keeping GitHub and Server in Sync
+## 保持 GitHub 与服务器同步
 
-Deployment actions (`validate-candidate`, `deploy`, and `bluegreen-deploy`) are Git-backed by default. They fail unless:
+部署动作（`validate-candidate`、`deploy` 和 `bluegreen-deploy`）默认由 Git 驱动。以下条件不满足时会失败：
 
-- the local ops worktree is clean,
-- local `HEAD` matches `SUB2API_OPS_REMOTE/SUB2API_OPS_BRANCH`,
-- and the server can fetch `SUB2API_OPS_REPO` with `SUB2API_REMOTE_GIT_SSH_KEY`.
+- 本地 ops 工作区是干净的；
+- 本地 `HEAD` 与 `SUB2API_OPS_REMOTE/SUB2API_OPS_BRANCH` 一致；
+- 服务器能使用 `SUB2API_REMOTE_GIT_SSH_KEY` 拉取 `SUB2API_OPS_REPO`。
 
-Normal release sequence:
+常规发布顺序：
 
 ```powershell
 git status
@@ -90,41 +90,41 @@ git push
 .\scripts\sub2api-ops.cmd run-logs
 ```
 
-For an emergency local upload only, set `SUB2API_ALLOW_DIRTY_DEPLOY=true` in `.env.ops`. Leave it `false` for normal production deployments.
+只有紧急本地上传时，才在 `.env.ops` 中设置 `SUB2API_ALLOW_DIRTY_DEPLOY=true`。正常生产部署应保持为 `false`。
 
-Production deployment commands require explicit user intent. If a request only asks to implement, fix, optimize, commit, or prepare changes, ask for confirmation before running `deploy`, `bluegreen-deploy`, `start-deploy`, or `start-bluegreen-deploy`. Read-only checks such as `validate-candidate`, `status`, `run-status`, and `run-logs` can be run without a deployment confirmation.
+生产部署命令需要明确的用户意图。如果请求只是实现、修复、优化、commit 或准备变更，运行 `deploy`、`bluegreen-deploy`、`start-deploy` 或 `start-bluegreen-deploy` 前必须先确认。`validate-candidate`、`status`、`run-status` 和 `run-logs` 等只读检查可以在没有部署确认时运行。
 
-Before deployment, compare the GitHub-tracked compose template with the live server compose file:
+部署前，比较 GitHub 跟踪的 compose 模板和服务器上的 live compose 文件：
 
 ```powershell
 .\scripts\sub2api-ops.cmd diff-server
 ```
 
-For first-time adoption, make the server's current compose file the GitHub baseline:
+首次接入时，可以将服务器当前 compose 文件同步为 GitHub 基线：
 
 ```powershell
 .\scripts\sub2api-ops.cmd sync-from-server
 ```
 
-After syncing, commit and push the changed `deploy/docker-compose.yml`.
+同步后，提交并推送变更后的 `deploy/docker-compose.yml`。
 
-## URL Allowlist Audit
+## URL Allowlist 审计
 
-Before enabling `SECURITY_URL_ALLOWLIST_ENABLED=true`, audit the hosts currently used by accounts, proxies, settings, and default pricing/upstream integrations:
+启用 `SECURITY_URL_ALLOWLIST_ENABLED=true` 前，先审计账号、代理、设置项以及默认 pricing/upstream 集成当前使用的 host：
 
 ```powershell
 .\scripts\sub2api-ops.cmd audit-allowlist
 ```
 
-Then run the read-only preflight against the candidate `SECURITY_URL_ALLOWLIST_*` values from the server `.env`:
+然后用服务器 `.env` 中候选的 `SECURITY_URL_ALLOWLIST_*` 值执行只读预检：
 
 ```powershell
 .\scripts\sub2api-ops.cmd validate-allowlist
 ```
 
-Do not enable the allowlist until both commands pass and every required upstream host has been reviewed.
+只有两个命令都通过，并且所有必需 upstream host 都已审查后，才能启用 allowlist。
 
-Required remote `.env` values:
+远程 `.env` 必需值：
 
 ```text
 POSTGRES_PASSWORD=...
@@ -136,81 +136,81 @@ SERVER_PORT=8080
 TZ=Asia/Shanghai
 ```
 
-These are placeholders only. Keep the real values in the server `.env`, and do not overwrite existing production secrets with values from this README or `.env.ops.example`.
+这些只是占位示例。真实值应保存在服务器 `.env` 中，不要用 README 或 `.env.ops.example` 中的值覆盖现有生产密钥。
 
-## Deployment Gates
+## 部署门禁
 
-`doctor`, `validate`, `validate-candidate`, and `deploy` fail closed on risky settings:
+`doctor`、`validate`、`validate-candidate` 和 `deploy` 会对高风险设置 fail closed：
 
-- `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `JWT_SECRET`, and `TOTP_ENCRYPTION_KEY` must be non-empty.
-- First-time deployments with an empty `postgres_data` directory must set `ADMIN_PASSWORD`.
-- `SERVER_PORT` must be numeric.
-- `BIND_HOST=0.0.0.0` requires `SUB2API_ALLOW_PUBLIC_BIND=true`; otherwise the compose default binds to `127.0.0.1`.
-- The `sub2api`, `postgres`, and `redis` images must be pinned with `@sha256:` digests.
+- `POSTGRES_PASSWORD`、`REDIS_PASSWORD`、`JWT_SECRET` 和 `TOTP_ENCRYPTION_KEY` 不能为空。
+- 首次部署且 `postgres_data` 目录为空时，必须设置 `ADMIN_PASSWORD`。
+- `SERVER_PORT` 必须是数字。
+- `BIND_HOST=0.0.0.0` 需要设置 `SUB2API_ALLOW_PUBLIC_BIND=true`；否则 compose 默认绑定到 `127.0.0.1`。
+- `sub2api`、`postgres` 和 `redis` 镜像必须使用 `@sha256:` digest 固定。
 
-When updating pinned images, resolve the current digest with Docker's registry tools before editing `deploy/docker-compose.yml`:
+更新固定镜像时，先用 Docker registry 工具解析当前 digest，再编辑 `deploy/docker-compose.yml`：
 
 ```powershell
 docker buildx imagetools inspect postgres:18-alpine
 docker buildx imagetools inspect redis:8-alpine
 ```
 
-For application releases, keep using an immutable Sub2API image digest. Avoid mutable tags such as `latest`, `main`, or `dev`.
+应用发布应继续使用不可变的 Sub2API 镜像 digest。避免部署 `latest`、`main` 或 `dev` 这类可变 tag。
 
-## Destructive Migration Confirmation
+## 破坏性迁移确认
 
-The deployment script scans unapplied SQL migrations for potentially irreversible statements such as `DROP TABLE`, `DROP COLUMN`, destructive `DELETE`, and lossy type changes. By default it scans:
+部署脚本会扫描尚未应用的 SQL 迁移，查找可能不可逆的语句，例如 `DROP TABLE`、`DROP COLUMN`、破坏性 `DELETE` 和有损类型变更。默认扫描：
 
 ```text
 /opt/sub2api-deploy/.ops/migrations
 ```
 
-Set `SUB2API_MIGRATIONS_DIR` in the server `.env` if the migration SQL files live elsewhere. If a risky unapplied migration is intentional, deployment requires both:
+如果迁移 SQL 文件位于其它目录，在服务器 `.env` 中设置 `SUB2API_MIGRATIONS_DIR`。如果高风险迁移是预期行为，部署需要同时设置：
 
 ```text
 SUB2API_DESTRUCTIVE_MIGRATION_CONFIRMED=true
 SUB2API_DESTRUCTIVE_MIGRATION_NOTE='affected files, impact, backup location, restore plan'
 ```
 
-## Safety Notes
+## 安全说明
 
-Use a dedicated Linux user such as `sub2api-ops`; avoid direct `root` automation where possible.
+使用专用 Linux 用户，例如 `sub2api-ops`；尽量避免直接用 `root` 做自动化。
 
-The script creates backups under:
+脚本会在以下目录创建备份：
 
 ```text
 /opt/sub2api-deploy/backups/
 ```
 
-Only the latest three backup directories are kept by default. Override with `SUB2API_BACKUP_RETENTION=<count>` in the server `.env` if needed.
+默认只保留最近 3 个备份目录。如需调整，在服务器 `.env` 中设置 `SUB2API_BACKUP_RETENTION=<count>`。
 
-Database backups use `pg_dump` from the running PostgreSQL container when available. If PostgreSQL is not running yet, the script still backs up configuration files and local directories.
+如果 PostgreSQL 容器正在运行，数据库备份会使用 `pg_dump`。如果 PostgreSQL 尚未运行，脚本仍会备份配置文件和本地目录。
 
-Rollback restores `.env`, `docker-compose.yml`, optional `config.yaml`, and restarts containers from the latest config backup. It does not automatically restore the database dump. If a database restore is needed, restore `postgres.sql` from the selected backup manually after stopping the application.
+回滚会恢复 `.env`、`docker-compose.yml`、可选的 `config.yaml`，并从最新配置备份重启容器。它不会自动恢复数据库 dump。如需恢复数据库，请在停止应用后，从选定备份中手动恢复 `postgres.sql`。
 
-Before every source-code deployment, check whether the new image contains database migrations. If migrations include potentially irreversible operations such as `DROP TABLE`, `DROP COLUMN`, destructive `DELETE`, lossy type changes, or data backfills that cannot be recomputed, pause and warn the operator before deployment. The deployment note must include the affected migration files, expected impact, backup location, and a concrete rollback plan. Do not rely on container rollback alone for irreversible database changes.
+每次源代码部署前，都要检查新镜像是否包含数据库迁移。如果迁移包含可能不可逆的操作，例如 `DROP TABLE`、`DROP COLUMN`、破坏性 `DELETE`、有损类型变更或无法重算的数据回填，应暂停并在部署前提醒操作者。部署说明必须包含受影响的迁移文件、预期影响、备份位置和具体回滚计划。不要只依赖容器回滚来处理不可逆数据库变更。
 
-## Blue-Green Deployment
+## 蓝绿部署
 
-`bluegreen-deploy` runs a single-server blue-green rollout:
+`bluegreen-deploy` 执行单机蓝绿发布：
 
-1. Keep PostgreSQL and Redis shared.
-2. Start the inactive application slot (`sub2api-blue` or `sub2api-green`).
-3. Verify the inactive slot health and recent logs.
-4. Reload Caddy to switch traffic to the healthy slot.
-5. Stop the previous slot after cutover to avoid duplicate background jobs.
+1. PostgreSQL 和 Redis 保持共享。
+2. 启动非活跃应用槽位（`sub2api-blue` 或 `sub2api-green`）。
+3. 验证非活跃槽位健康状态和最近日志。
+4. 重新加载 Caddy，将流量切到健康槽位。
+5. 切换完成后停止旧槽位，避免重复后台任务。
 
-Caddy is the only service bound to `${BIND_HOST}:${SERVER_PORT}`. The current slot is tracked in:
+Caddy 是唯一绑定到 `${BIND_HOST}:${SERVER_PORT}` 的服务。当前槽位记录在：
 
 ```text
 /opt/sub2api-deploy/.ops/active-slot
 ```
 
-Use `switch-slot` for a manual traffic switch and `active-slot` to print the current slot.
+使用 `switch-slot` 手动切换流量，使用 `active-slot` 打印当前槽位。
 
-## Background Deploy Runs
+## 后台部署运行
 
-Use `start-bluegreen-deploy` for production deployments when the control channel may depend on this same service. It starts the remote deployment as a background run, writes durable logs on the server, and returns a run id before traffic is switched.
+当生产部署的控制通道可能依赖同一服务时，使用 `start-bluegreen-deploy`。它会在远程后台启动部署，在服务器写入持久化日志，并在流量切换前返回 run id。
 
 ```powershell
 .\scripts\sub2api-ops.cmd validate-candidate
@@ -219,10 +219,10 @@ Use `start-bluegreen-deploy` for production deployments when the control channel
 .\scripts\sub2api-ops.cmd run-logs
 ```
 
-Run data is stored on the server under:
+运行数据保存在服务器：
 
 ```text
 /opt/sub2api-deploy/.ops/deploy-runs/
 ```
 
-`run-status` and `run-logs` read the latest run by default. Set `SUB2API_RUN_ID=<run-id>` in `.env.ops` to inspect an older run. The server keeps the latest 20 runs by default; override with `SUB2API_RUN_RETENTION=<count>` in the server `.env`.
+`run-status` 和 `run-logs` 默认读取最新运行。要查看历史运行，在 `.env.ops` 中设置 `SUB2API_RUN_ID=<run-id>`。服务器默认保留最近 20 次运行；可在服务器 `.env` 中设置 `SUB2API_RUN_RETENTION=<count>` 调整。

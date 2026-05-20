@@ -1,27 +1,27 @@
-# Server Preparation
+# 服务器准备
 
-Use these steps once per server. Codex can run them after you provide SSH access.
+以下步骤通常每台服务器只需执行一次。你提供 SSH 访问后，Codex 可以协助执行。
 
-## Recommended Account
+## 推荐账号
 
-Create a dedicated Linux user:
+创建专用 Linux 用户：
 
 ```bash
 sudo adduser sub2api-ops
 sudo usermod -aG docker sub2api-ops
 ```
 
-The user needs permission to run Docker Compose in the deployment directory.
+该用户需要有权限在部署目录中运行 Docker Compose。
 
-## Deployment Directory
+## 部署目录
 
-Recommended path:
+推荐路径：
 
 ```text
 /opt/sub2api-deploy
 ```
 
-The server should contain:
+服务器应包含：
 
 ```text
 /opt/sub2api-deploy/.env
@@ -31,9 +31,9 @@ The server should contain:
 /opt/sub2api-deploy/redis_data/
 ```
 
-## Required Secrets
+## 必需密钥
 
-Keep these only on the server, not in Git:
+这些值只保存在服务器上，不要提交到 Git：
 
 ```text
 POSTGRES_PASSWORD=<secure random string>
@@ -46,17 +46,17 @@ SERVER_PORT=8080
 TZ=Asia/Shanghai
 ```
 
-The values above are examples. Existing production values in `/opt/sub2api-deploy/.env` are the source of truth; generate or update only missing secrets.
+上面的值只是示例。`/opt/sub2api-deploy/.env` 中现有生产值才是真实来源；只生成或更新缺失的密钥。
 
-Generate secrets on Linux with:
+在 Linux 上可以用以下命令生成密钥：
 
 ```bash
 openssl rand -hex 32
 ```
 
-## Verification
+## 验证内容
 
-The automation checks:
+自动化会检查：
 
 ```text
 docker compose config

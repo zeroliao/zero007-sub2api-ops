@@ -1,60 +1,60 @@
-# Source Change Release Flow
+# 源代码变更发布流程
 
-Use this flow when changing Sub2API application behavior, not just deployment configuration.
+当变更 Sub2API 应用行为，而不仅是部署配置时，使用这套流程。
 
-## Repositories
+## 仓库
 
 ```text
 C:\Users\Administrator\Desktop\code\sub2api-wrap\sub2api
 ```
 
-Ops repository:
+Ops 仓库：
 
 ```text
 git@github.com:zeroliao/zero007-sub2api-ops.git
 ```
 
-Tracks deployment scripts and the production compose baseline.
+跟踪部署脚本和生产 compose 基线。
 
 ```text
 C:\Users\Administrator\Desktop\code\sub2api-wrap\sub2api-src
 ```
 
-Source repository:
+Source 仓库：
 
 ```text
 git@github.com:zeroliao/sub2api.git
 ```
 
-Tracks Sub2API source changes.
+跟踪 Sub2API 源代码变更。
 
-## Release Sequence
+## 发布顺序
 
-1. Create a feature branch in `sub2api-src`.
-2. Modify backend/frontend code.
-3. Run targeted tests for the touched area.
-4. Build a Docker image from the source repository.
-5. Push the image to a registry.
-6. Update `deploy/docker-compose.yml` in the ops repository to use the new immutable image tag.
-7. If the release includes new SQL migrations, copy them to the server migration scan directory or set `SUB2API_MIGRATIONS_DIR` to the source migration directory.
-8. Run `diff-server` to confirm the server compose still matches the ops baseline.
-9. Commit and push both repositories.
-10. Run `validate-candidate`; the server fetches the ops repository and checks out the same pushed commit.
-11. Run `backup`.
-12. Run `bluegreen-deploy` for application releases, or `deploy` for traditional all-in-place deployment.
-13. Verify health and logs.
+1. 在 `sub2api-src` 创建功能分支。
+2. 修改后端/前端代码。
+3. 针对受影响区域运行测试。
+4. 从源代码仓库构建 Docker 镜像。
+5. 将镜像推送到 registry。
+6. 更新 ops 仓库中的 `deploy/docker-compose.yml`，使用新的不可变镜像 tag。
+7. 如果发布包含新的 SQL 迁移，将它们复制到服务器迁移扫描目录，或将 `SUB2API_MIGRATIONS_DIR` 设置为源代码迁移目录。
+8. 运行 `diff-server`，确认服务器 compose 仍与 ops 基线一致。
+9. 提交并推送两个仓库。
+10. 运行 `validate-candidate`；服务器会拉取 ops 仓库并检出同一个已推送 commit。
+11. 运行 `backup`。
+12. 应用发布运行 `bluegreen-deploy`；如明确选择传统全量原地部署，则运行 `deploy`。
+13. 验证健康状态和日志。
 
-Deployment actions fail if the local ops worktree has uncommitted changes or if local `HEAD` does not match the configured remote branch. `SUB2API_ALLOW_DIRTY_DEPLOY=true` is available only for explicit emergency local uploads.
+如果本地 ops 工作区有未提交改动，或本地 `HEAD` 与配置的远程分支不一致，部署动作会失败。`SUB2API_ALLOW_DIRTY_DEPLOY=true` 仅用于明确批准的紧急本地上传。
 
-## Image Tags
+## 镜像 Tag
 
-Prefer immutable tags:
+优先使用不可变 tag：
 
 ```text
 ghcr.io/zeroliao/sub2api:<yyyyMMdd-HHmm>-<short-sha>
 ```
 
-Avoid deploying mutable tags for custom code:
+避免为自定义代码部署可变 tag：
 
 ```text
 latest
@@ -62,18 +62,18 @@ main
 dev
 ```
 
-## Rollback
+## 回滚
 
-Rollback is handled from the ops repository by restoring the previous compose backup and running:
+回滚由 ops 仓库处理：恢复上一个 compose 备份并运行：
 
 ```powershell
 .\scripts\sub2api-ops.cmd rollback
 ```
 
-The server keeps backups under:
+服务器备份保存在：
 
 ```text
 /opt/sub2api-deploy/backups/
 ```
 
-Rollback restores config files and restarts containers. It does not automatically restore `postgres.sql`; database restores must be performed manually from the selected backup.
+回滚会恢复配置文件并重启容器。它不会自动恢复 `postgres.sql`；数据库恢复必须从选定备份中手动执行。
