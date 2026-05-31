@@ -82,6 +82,59 @@ services:
     networks:
       - sub2api-network
 
+  clash-node:
+    image: ghcr.io/sagernet/sing-box@sha256:da0e2331395c9025a85fa58892772b4cdbe5f2e530e93defeec3968175d06c6d
+    container_name: sub2api-clash-node
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-ec"]
+    command: |
+      : "$${CLASH_NODE_PASSWORD:?CLASH_NODE_PASSWORD is required}"
+      cat > /tmp/sing-box-clash-node.json <<EOF
+      {
+        "log": {
+          "level": "$${CLASH_NODE_LOG_LEVEL:-warn}",
+          "timestamp": true
+        },
+        "inbounds": [
+          {
+            "type": "shadowsocks",
+            "tag": "clash-verge-ss",
+            "listen": "0.0.0.0",
+            "listen_port": $${CLASH_NODE_PORT:-8388},
+            "method": "$${CLASH_NODE_METHOD:-aes-256-gcm}",
+            "password": "$${CLASH_NODE_PASSWORD}"
+          }
+        ],
+        "outbounds": [
+          {
+            "type": "direct",
+            "tag": "direct"
+          }
+        ],
+        "route": {
+          "final": "direct"
+        }
+      }
+      EOF
+      exec /usr/local/bin/sing-box run -c /tmp/sing-box-clash-node.json
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+      - CLASH_NODE_PORT=${CLASH_NODE_PORT:-8388}
+      - CLASH_NODE_METHOD=${CLASH_NODE_METHOD:-aes-256-gcm}
+      - CLASH_NODE_PASSWORD=${CLASH_NODE_PASSWORD:?CLASH_NODE_PASSWORD is required}
+      - CLASH_NODE_LOG_LEVEL=${CLASH_NODE_LOG_LEVEL:-warn}
+    ports:
+      - "${CLASH_NODE_BIND_HOST:-0.0.0.0}:${CLASH_NODE_PORT:-8388}:${CLASH_NODE_PORT:-8388}/tcp"
+      - "${CLASH_NODE_BIND_HOST:-0.0.0.0}:${CLASH_NODE_PORT:-8388}:${CLASH_NODE_PORT:-8388}/udp"
+    networks:
+      - sub2api-network
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/sing-box-clash-node.json && /usr/local/bin/sing-box check -c /tmp/sing-box-clash-node.json >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
   caddy:
     image: caddy:2-alpine@sha256:3739ea4f0c877259a693d932693cf8f3408e9a9497c004f031b0e830e93e1546
     container_name: sub2api-caddy
