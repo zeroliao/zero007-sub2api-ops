@@ -120,6 +120,20 @@ v<version>
 
 如果任一节点失败，停止进入下一节点；先把失败原因写入版本记录，并根据影响选择修复、重试、取消或失败回滚。
 
+## 发版复盘固化规则
+
+涉及创建版本、发版、部署或回滚时，必须先阅读本文档，再执行任何分支、镜像、compose 或生产操作。
+
+每次发版前必须显式完成以下检查：
+
+- 确认当前不在 Plan Mode 或只规划状态；用户明确要求执行后，按版本节点连续推进。
+- 先运行 `diff-server`，把服务器已有服务、挂载目录、sidecar 和环境差异纳入 release compose 基线，避免部署时误删生产已有组件。
+- 生产候选镜像只能使用 `release/<version>` 构建出的 immutable digest；不得用 tag 或 main 构建结果替代已验证 digest。
+- 本地 Docker 拉取 fixed digest 失败时，先排查 Docker Hub registry mirror、OCI referrers 或 attestation 兼容问题；必要时用 `registry-1.docker.io/library/...@sha256:...` 拉取同一 digest 交叉验证，不得因此改动生产 compose 的 digest 语义。
+- 版本记录必须使用 UTF-8 保存，并记录 source commit、ops commit、image digest、本地验证结果、服务器验证结果、备份路径、部署 run id、活跃槽位和回滚目标。
+- 生产已有 `sing-box`、`mihomo`、`xray` 等 sidecar 只要仍被服务器使用，必须保留或明确迁移；不得在未确认影响前从 compose 中移除。
+- 部署成功后，先确认健康检查、迁移和核心路径，再合入 `main`、打 `v<version>` tag 和归档版本记录。
+
 ## 镜像构建与发布规则
 
 - 生产候选镜像由 `sub2api-src/.github/workflows/ghcr-image.yml` 构建。
