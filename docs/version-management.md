@@ -55,6 +55,8 @@ v<version>
 
 2. 开发：
    - 业务改动进入对应仓库的 `dev/<version>`。
+   - `dev/<version>` 是唯一日常开发入口；`release/<version>` 只接收从 `dev/<version>` 同步过来的候选内容。
+   - 不要直接在 `release/<version>` 上做普通修复；如因生产紧急情况必须直接修复，部署成功后必须立即把同一提交回填到对应 `dev/<version>`。
    - 上游同步必须由用户主动提出，并作为版本内容进入 `dev/<version>`。
    - Commit message 使用中文，说明改动内容、原因和影响。
 
@@ -76,7 +78,8 @@ v<version>
    - 两个仓库都打 `v<version>` tag。
    - 未改动仓库的 tag 指向本次部署实际使用的 `main` commit。
    - `v<version>` 是部署成功后的归档点；不得用 tag 触发的新镜像替换已经本地和服务器验证通过的 digest。
-   - 将最新 `main` 同步到所有 `开发中`、`已提测` 状态版本的 dev/release 分支。
+   - 将最新 `main` 同步到所有仍保留的 `dev/<version>`；如果某版本仍处于 `开发中` 或 `已提测`，同步后还必须重新同步 release 并重新验证。
+   - 对已经成功归档且不再继续开发的版本，可以删除或归档 `dev/<version>`；只要保留该分支，就不得让它落后于 `main`。
 
 6. 失败：
    - 版本状态改为 `失败`。
@@ -133,6 +136,7 @@ v<version>
 - 版本记录必须使用 UTF-8 保存，并记录 source commit、ops commit、image digest、本地验证结果、服务器验证结果、备份路径、部署 run id、活跃槽位和回滚目标。
 - 生产已有 `sing-box`、`mihomo`、`xray` 等 sidecar 只要仍被服务器使用，必须保留或明确迁移；不得在未确认影响前从 compose 中移除。
 - 部署成功后，先确认健康检查、迁移和核心路径，再合入 `main`、打 `v<version>` tag 和归档版本记录。
+- 部署成功后必须处理开发分支收尾：保留 `dev/<version>` 时将其 fast-forward 到最新 `main`；不保留时明确删除或归档该分支。
 
 ## 镜像构建与发布规则
 
@@ -200,6 +204,7 @@ v<version>
 
 - `release/<version>` 已合入受影响仓库的 `main`。
 - 两个仓库都已创建 `v<version>` tag。
+- 仍保留的 `dev/<version>` 已 fast-forward 到最新 `main`；如果选择不保留，已删除或归档该开发分支。
 - 版本状态改为 `成功`。
 - 已记录生产部署结果、最终 commit、compose commit 和 image digest。
 - 已确认发布归档 workflow 没有向默认分支追加未经验证的 VERSION commit。
@@ -208,7 +213,7 @@ v<version>
 
 ### 检查点 6：同步其它未完成版本
 
-- 最新 `main` 已同步到所有 `开发中`、`已提测` 版本的 `dev/<version>`。
+- 最新 `main` 已同步到所有仍保留的 `dev/<version>`。
 - `已提测` 版本的 `release/<version>` 已重新由对应 dev 分支同步。
 - 同步后的 `已提测` 版本必须重新执行本地 Docker 验证。
 

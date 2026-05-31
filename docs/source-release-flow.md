@@ -27,6 +27,8 @@ git@github.com:zeroliao/sub2api.git
 1. 分配下一个版本号，两个仓库使用同一个版本号。
 2. 在需要改动的仓库创建 `dev/<version>`；未改动仓库记录当前 `main` commit 或上一个成功 tag。
 3. 在 `sub2api-src/dev/<version>` 完成源码改动；如需同步 upstream，必须由用户主动提出并纳入该版本内容。
+   - 正常情况下，任何源码修复都先提交到 `dev/<version>`，再同步到 `release/<version>`；不要直接把 `release/<version>` 当开发分支使用。
+   - 生产紧急修复如果临时直接进入 `release/<version>`，部署成功后必须立即回填到 `dev/<version>`。
 4. 针对受影响区域运行后端、前端或静态检查。
 5. 将 `sub2api-src/dev/<version>` 同步到 `sub2api-src/release/<version>`。
 6. 推送 `sub2api-src/release/<version>`，由 `GHCR Image` workflow 构建候选镜像并推送到 GHCR。
@@ -44,7 +46,8 @@ git@github.com:zeroliao/sub2api.git
 18. 两个仓库都创建 `v<version>` tag，未改动仓库的 tag 指向本次部署实际使用的 `main` commit。
 19. `sub2api-src` 的 `release.yml` 只做 GitHub Release 和二进制归档，不重新构建 Docker 镜像。
 20. 如需要镜像版本 tag，手动运行 `Promote Verified Image` workflow，将已验证 digest 提升为 `v<version>` / `<version>` tag。
-21. 将最新 `main` 同步到所有仍处于 `开发中`、`已提测` 状态的版本分支；已提测版本同步后必须重新验证。
+21. 将最新 `main` 同步到所有仍保留的 `dev/<version>`；如果该版本分支还处于 `开发中` 或 `已提测`，同步后必须重新验证。
+22. 对已经成功归档且不再继续开发的版本，可以删除或归档 `dev/<version>`；只要保留该分支，就不得让它落后于 `main`。
 
 如果本地 ops 工作区有未提交改动，或本地 `HEAD` 与配置的远程分支不一致，部署动作会失败。`SUB2API_ALLOW_DIRTY_DEPLOY=true` 仅用于明确批准的紧急本地上传。
 
