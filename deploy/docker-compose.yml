@@ -72,6 +72,16 @@ x-sub2api-app: &sub2api-app
     start_period: 30s
 
 services:
+  sing-box:
+    image: ghcr.io/sagernet/sing-box@sha256:da0e2331395c9025a85fa58892772b4cdbe5f2e530e93defeec3968175d06c6d
+    container_name: sing-box
+    restart: unless-stopped
+    volumes:
+      - ./sing-box/config.json:/etc/sing-box/config.json:ro
+    command: ["run", "-c", "/etc/sing-box/config.json"]
+    networks:
+      - sub2api-network
+
   caddy:
     image: caddy:2-alpine@sha256:3739ea4f0c877259a693d932693cf8f3408e9a9497c004f031b0e830e93e1546
     container_name: sub2api-caddy
