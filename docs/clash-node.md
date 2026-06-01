@@ -31,10 +31,22 @@ CLASH_SUBSCRIPTION_TOKEN=<private-random-token>
 https://api.zero007.chat/clash/<CLASH_SUBSCRIPTION_TOKEN>.yaml
 ```
 
+同时会生成手机端兼容订阅，配置更精简，不包含 `dns`、`fake-ip`、`mixed-port` 等部分移动端 Clash 客户端容易出现兼容差异的字段：
+
+```text
+https://api.zero007.chat/clash/<CLASH_SUBSCRIPTION_TOKEN>.mobile.yaml
+```
+
 在服务器上可用下面的命令查看完整订阅 URL：
 
 ```sh
 sudo awk -F= '/^CLASH_SUBSCRIPTION_TOKEN=/{print "https://api.zero007.chat/clash/"$2".yaml"}' /opt/sub2api-deploy/.env
+```
+
+查看手机端兼容订阅 URL：
+
+```sh
+sudo awk -F= '/^CLASH_SUBSCRIPTION_TOKEN=/{print "https://api.zero007.chat/clash/"$2".mobile.yaml"}' /opt/sub2api-deploy/.env
 ```
 
 不要把订阅 URL、真实 `CLASH_NODE_PASSWORD` 或 `CLASH_SUBSCRIPTION_TOKEN` 写入 Git、README、截图或公开对话日志。拿到订阅 URL 的人等同于拿到节点访问权限。
