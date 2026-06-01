@@ -144,6 +144,7 @@ validate_image_pins() {
   local found_green=0
   local found_postgres=0
   local found_redis=0
+  local found_sing_box=0
 
   config="$(compose_file "$file" --profile bluegreen config)"
   while IFS='|' read -r service image; do
@@ -153,6 +154,8 @@ validate_image_pins() {
       sub2api-green) found_green=1 ;;
       postgres) found_postgres=1 ;;
       redis) found_redis=1 ;;
+      sing-box) found_sing_box=1 ;;
+      clash-node) ;;
       *) continue ;;
     esac
 
@@ -177,6 +180,7 @@ validate_image_pins() {
   [ "$found_green" -eq 1 ] || { log "Missing compose service image: sub2api-green"; missing=1; }
   [ "$found_postgres" -eq 1 ] || { log "Missing compose service image: postgres"; missing=1; }
   [ "$found_redis" -eq 1 ] || { log "Missing compose service image: redis"; missing=1; }
+  [ "$found_sing_box" -eq 1 ] || { log "Missing compose service image: sing-box"; missing=1; }
 
   [ "$missing" -eq 0 ] || fail "Compose image pin validation failed."
 }
@@ -500,6 +504,23 @@ check_service_logs() {
   return 0
 }
 
+compose_has_service() {
+  local service="$1"
+  compose --profile bluegreen config --services | grep -qx "$service"
+}
+
+ensure_sidecar_services() {
+  local service
+  for service in sing-box clash-node; do
+    if compose_has_service "$service"; then
+      log "Ensuring sidecar service: $service"
+      compose --profile bluegreen up -d "$service"
+      wait_for_service_health "$service" 12 3 || fail "Sidecar service failed health check: $service"
+      check_service_logs "$service" || fail "Sidecar logs contain fatal patterns: $service"
+    fi
+  done
+}
+
 check_logs() {
   check_service_logs "$(slot_service "$(active_slot)")"
 }
@@ -569,6 +590,8 @@ bluegreen_deploy() {
   previous="$(active_slot)"
   target="$(inactive_slot)"
   target_service="$(slot_service "$target")"
+
+  ensure_sidecar_services
 
   log "Starting inactive slot: $target_service"
   compose --profile bluegreen up -d postgres redis "$target_service"
