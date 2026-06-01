@@ -400,6 +400,7 @@ write_caddyfile() {
     node_password="$(yaml_single_quote "$CLASH_NODE_PASSWORD")"
     mkdir -p "$DEPLOY_DIR/caddy/subscriptions"
     subscription_file="$DEPLOY_DIR/caddy/subscriptions/${CLASH_SUBSCRIPTION_TOKEN}.yaml"
+    find "$DEPLOY_DIR/caddy/subscriptions" -maxdepth 1 -type f -name '*.yaml' ! -name "${CLASH_SUBSCRIPTION_TOKEN}.yaml" -delete
 
     cat > "$subscription_file" <<EOF
 proxies:
