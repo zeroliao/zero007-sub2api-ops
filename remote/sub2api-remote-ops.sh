@@ -403,6 +403,39 @@ write_caddyfile() {
     find "$DEPLOY_DIR/caddy/subscriptions" -maxdepth 1 -type f -name '*.yaml' ! -name "${CLASH_SUBSCRIPTION_TOKEN}.yaml" -delete
 
     cat > "$subscription_file" <<EOF
+mixed-port: 7890
+allow-lan: false
+mode: rule
+log-level: info
+ipv6: false
+unified-delay: true
+tcp-concurrent: true
+
+dns:
+  enable: true
+  listen: 127.0.0.1:1053
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+    - localhost.ptlogin2.qq.com
+    - localhost.sec.qq.com
+    - localhost.work.weixin.qq.com
+  default-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  fallback:
+    - https://1.1.1.1/dns-query
+    - https://8.8.8.8/dns-query
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+
 proxies:
   - name: zero007-sub2api-ss
     type: ss
@@ -416,8 +449,132 @@ proxy-groups:
     type: select
     proxies:
       - zero007-sub2api-ss
+      - DIRECT
+  - name: AI
+    type: select
+    proxies:
+      - PROXY
+      - zero007-sub2api-ss
+      - DIRECT
+  - name: Streaming
+    type: select
+    proxies:
+      - PROXY
+      - zero007-sub2api-ss
+      - DIRECT
+  - name: Microsoft
+    type: select
+    proxies:
+      - DIRECT
+      - PROXY
+      - zero007-sub2api-ss
+  - name: Apple
+    type: select
+    proxies:
+      - DIRECT
+      - PROXY
+      - zero007-sub2api-ss
+  - name: Final
+    type: select
+    proxies:
+      - PROXY
+      - DIRECT
+
 rules:
-  - MATCH,PROXY
+  - DOMAIN-SUFFIX,local,DIRECT
+  - DOMAIN-SUFFIX,lan,DIRECT
+  - DOMAIN-SUFFIX,localhost,DIRECT
+  - DOMAIN-SUFFIX,invalid,DIRECT
+  - DOMAIN,localhost,DIRECT
+  - IP-CIDR,0.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
+  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,169.254.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,224.0.0.0/4,DIRECT,no-resolve
+  - IP-CIDR,240.0.0.0/4,DIRECT,no-resolve
+  - IP-CIDR6,::1/128,DIRECT,no-resolve
+  - IP-CIDR6,fc00::/7,DIRECT,no-resolve
+  - IP-CIDR6,fe80::/10,DIRECT,no-resolve
+  - DOMAIN-SUFFIX,google-analytics.com,REJECT
+  - DOMAIN-SUFFIX,doubleclick.net,REJECT
+  - DOMAIN-SUFFIX,googlesyndication.com,REJECT
+  - DOMAIN-SUFFIX,googletagmanager.com,REJECT
+  - DOMAIN-SUFFIX,adservice.google.com,REJECT
+  - DOMAIN-SUFFIX,ads.linkedin.com,REJECT
+  - DOMAIN-SUFFIX,ads.twitter.com,REJECT
+  - DOMAIN-SUFFIX,ads.yahoo.com,REJECT
+  - DOMAIN-SUFFIX,openai.com,AI
+  - DOMAIN-SUFFIX,chatgpt.com,AI
+  - DOMAIN-SUFFIX,oaistatic.com,AI
+  - DOMAIN-SUFFIX,oaiusercontent.com,AI
+  - DOMAIN-SUFFIX,anthropic.com,AI
+  - DOMAIN-SUFFIX,claude.ai,AI
+  - DOMAIN-SUFFIX,gemini.google.com,AI
+  - DOMAIN-SUFFIX,perplexity.ai,AI
+  - DOMAIN-SUFFIX,netflix.com,Streaming
+  - DOMAIN-SUFFIX,nflxvideo.net,Streaming
+  - DOMAIN-SUFFIX,disneyplus.com,Streaming
+  - DOMAIN-SUFFIX,disney-plus.net,Streaming
+  - DOMAIN-SUFFIX,hulu.com,Streaming
+  - DOMAIN-SUFFIX,hbomax.com,Streaming
+  - DOMAIN-SUFFIX,max.com,Streaming
+  - DOMAIN-SUFFIX,youtube.com,Streaming
+  - DOMAIN-SUFFIX,googlevideo.com,Streaming
+  - DOMAIN-SUFFIX,ytimg.com,Streaming
+  - DOMAIN-SUFFIX,microsoft.com,Microsoft
+  - DOMAIN-SUFFIX,windows.com,Microsoft
+  - DOMAIN-SUFFIX,windowsupdate.com,Microsoft
+  - DOMAIN-SUFFIX,office.com,Microsoft
+  - DOMAIN-SUFFIX,office365.com,Microsoft
+  - DOMAIN-SUFFIX,live.com,Microsoft
+  - DOMAIN-SUFFIX,msn.com,Microsoft
+  - DOMAIN-SUFFIX,azure.com,Microsoft
+  - DOMAIN-SUFFIX,apple.com,Apple
+  - DOMAIN-SUFFIX,icloud.com,Apple
+  - DOMAIN-SUFFIX,icloud-content.com,Apple
+  - DOMAIN-SUFFIX,itunes.apple.com,Apple
+  - DOMAIN-SUFFIX,appstore.com,Apple
+  - DOMAIN-SUFFIX,cn,DIRECT
+  - DOMAIN-SUFFIX,ac.cn,DIRECT
+  - DOMAIN-SUFFIX,com.cn,DIRECT
+  - DOMAIN-SUFFIX,edu.cn,DIRECT
+  - DOMAIN-SUFFIX,gov.cn,DIRECT
+  - DOMAIN-SUFFIX,net.cn,DIRECT
+  - DOMAIN-SUFFIX,org.cn,DIRECT
+  - DOMAIN-SUFFIX,baidu.com,DIRECT
+  - DOMAIN-SUFFIX,bilibili.com,DIRECT
+  - DOMAIN-SUFFIX,biliapi.net,DIRECT
+  - DOMAIN-SUFFIX,qq.com,DIRECT
+  - DOMAIN-SUFFIX,weixin.qq.com,DIRECT
+  - DOMAIN-SUFFIX,wechat.com,DIRECT
+  - DOMAIN-SUFFIX,gtimg.com,DIRECT
+  - DOMAIN-SUFFIX,alicdn.com,DIRECT
+  - DOMAIN-SUFFIX,aliyun.com,DIRECT
+  - DOMAIN-SUFFIX,alipay.com,DIRECT
+  - DOMAIN-SUFFIX,taobao.com,DIRECT
+  - DOMAIN-SUFFIX,tmall.com,DIRECT
+  - DOMAIN-SUFFIX,jd.com,DIRECT
+  - DOMAIN-SUFFIX,mi.com,DIRECT
+  - DOMAIN-SUFFIX,xiaomi.com,DIRECT
+  - DOMAIN-SUFFIX,163.com,DIRECT
+  - DOMAIN-SUFFIX,126.net,DIRECT
+  - DOMAIN-SUFFIX,douyin.com,DIRECT
+  - DOMAIN-SUFFIX,amap.com,DIRECT
+  - DOMAIN-SUFFIX,meituan.com,DIRECT
+  - DOMAIN-SUFFIX,zhihu.com,DIRECT
+  - DOMAIN-SUFFIX,csdn.net,DIRECT
+  - DOMAIN-SUFFIX,github.com,PROXY
+  - DOMAIN-SUFFIX,githubusercontent.com,PROXY
+  - DOMAIN-SUFFIX,githubassets.com,PROXY
+  - DOMAIN-SUFFIX,gitlab.com,PROXY
+  - DOMAIN-SUFFIX,docker.com,PROXY
+  - DOMAIN-SUFFIX,docker.io,PROXY
+  - DOMAIN-SUFFIX,ghcr.io,PROXY
+  - GEOIP,CN,DIRECT
+  - MATCH,Final
 EOF
     chmod 0644 "$subscription_file"
 
