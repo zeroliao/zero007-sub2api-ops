@@ -448,7 +448,7 @@ dns:
       - geolocation-!cn
 
 proxies:
-- name: zero007-sub2api-ss
+  - name: zero007-sub2api-ss
     type: ss
     server: $node_server
     port: $node_port
