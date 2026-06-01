@@ -1,0 +1,2 @@
+*.sh text eol=lf
+remote/*.sh text eol=lf
