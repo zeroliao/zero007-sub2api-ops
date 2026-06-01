@@ -384,7 +384,7 @@ yaml_single_quote() {
 
 write_caddyfile() {
   local slot="$1"
-  local service subscription_path subscription_file node_server node_port node_method node_password
+  local service subscription_path mobile_subscription_path subscription_file mobile_subscription_file node_server node_port node_method node_password
   service="$(slot_service "$slot")"
   mkdir -p "$DEPLOY_DIR/caddy"
 
@@ -394,13 +394,15 @@ write_caddyfile() {
     [ -n "${CLASH_NODE_PASSWORD:-}" ] || fail "CLASH_NODE_PASSWORD is required when CLASH_SUBSCRIPTION_TOKEN is set."
 
     subscription_path="/clash/${CLASH_SUBSCRIPTION_TOKEN}.yaml"
+    mobile_subscription_path="/clash/${CLASH_SUBSCRIPTION_TOKEN}.mobile.yaml"
     node_server="${CLASH_NODE_SERVER:-api.zero007.chat}"
     node_port="${CLASH_NODE_PORT:-8388}"
     node_method="${CLASH_NODE_METHOD:-aes-256-gcm}"
     node_password="$(yaml_single_quote "$CLASH_NODE_PASSWORD")"
     mkdir -p "$DEPLOY_DIR/caddy/subscriptions"
     subscription_file="$DEPLOY_DIR/caddy/subscriptions/${CLASH_SUBSCRIPTION_TOKEN}.yaml"
-    find "$DEPLOY_DIR/caddy/subscriptions" -maxdepth 1 -type f -name '*.yaml' ! -name "${CLASH_SUBSCRIPTION_TOKEN}.yaml" -delete
+    mobile_subscription_file="$DEPLOY_DIR/caddy/subscriptions/${CLASH_SUBSCRIPTION_TOKEN}.mobile.yaml"
+    find "$DEPLOY_DIR/caddy/subscriptions" -maxdepth 1 -type f -name '*.yaml' ! -name "${CLASH_SUBSCRIPTION_TOKEN}.yaml" ! -name "${CLASH_SUBSCRIPTION_TOKEN}.mobile.yaml" -delete
 
     cat > "$subscription_file" <<EOF
 mixed-port: 7890
@@ -578,11 +580,69 @@ rules:
 EOF
     chmod 0644 "$subscription_file"
 
+    cat > "$mobile_subscription_file" <<EOF
+mode: rule
+log-level: info
+ipv6: false
+allow-lan: false
+
+proxies:
+  - name: zero007-sub2api-ss
+    type: ss
+    server: $node_server
+    port: $node_port
+    cipher: $node_method
+    password: '$node_password'
+    udp: true
+
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies:
+      - zero007-sub2api-ss
+      - DIRECT
+
+rules:
+  - DOMAIN-SUFFIX,local,DIRECT
+  - DOMAIN-SUFFIX,lan,DIRECT
+  - DOMAIN-SUFFIX,localhost,DIRECT
+  - DOMAIN,localhost,DIRECT
+  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,100.64.0.0/10,DIRECT,no-resolve
+  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve
+  - IP-CIDR,169.254.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve
+  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve
+  - IP-CIDR,224.0.0.0/4,DIRECT,no-resolve
+  - IP-CIDR6,::1/128,DIRECT,no-resolve
+  - IP-CIDR6,fc00::/7,DIRECT,no-resolve
+  - IP-CIDR6,fe80::/10,DIRECT,no-resolve
+  - DOMAIN-SUFFIX,cn,DIRECT
+  - DOMAIN-SUFFIX,baidu.com,DIRECT
+  - DOMAIN-SUFFIX,bilibili.com,DIRECT
+  - DOMAIN-SUFFIX,qq.com,DIRECT
+  - DOMAIN-SUFFIX,wechat.com,DIRECT
+  - DOMAIN-SUFFIX,aliyun.com,DIRECT
+  - DOMAIN-SUFFIX,alipay.com,DIRECT
+  - DOMAIN-SUFFIX,taobao.com,DIRECT
+  - DOMAIN-SUFFIX,jd.com,DIRECT
+  - GEOIP,CN,DIRECT
+  - MATCH,PROXY
+EOF
+    chmod 0644 "$mobile_subscription_file"
+
     cat > "$DEPLOY_DIR/caddy/Caddyfile" <<EOF
 :8080 {
 	handle $subscription_path {
 		root * /srv/clash-subscriptions
 		rewrite * /${CLASH_SUBSCRIPTION_TOKEN}.yaml
+		header Content-Type "text/yaml; charset=utf-8"
+		file_server
+	}
+
+	handle $mobile_subscription_path {
+		root * /srv/clash-subscriptions
+		rewrite * /${CLASH_SUBSCRIPTION_TOKEN}.mobile.yaml
 		header Content-Type "text/yaml; charset=utf-8"
 		file_server
 	}
