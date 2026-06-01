@@ -1,10 +1,10 @@
-# Clash Verge 节点
+# Clash Verge 节点与订阅
 
-本部署额外提供一个独立 `clash-node` 服务，用 `sing-box` 暴露 Shadowsocks 入站，供 Clash Verge 手动添加节点使用。
+本部署额外提供一个独立 `clash-node` 服务，用 `sing-box` 暴露 Shadowsocks 入站，供 Clash Verge 使用。
 
-## 服务端
+## 服务端配置
 
-生产服务器 `.env` 必须设置：
+生产服务器 `.env` 必须配置：
 
 ```text
 CLASH_NODE_PASSWORD=<strong-random-password>
@@ -17,13 +17,31 @@ CLASH_NODE_PORT=8388
 CLASH_NODE_METHOD=aes-256-gcm
 CLASH_NODE_BIND_HOST=0.0.0.0
 CLASH_NODE_LOG_LEVEL=warn
+CLASH_NODE_SERVER=api.zero007.chat
+CLASH_SUBSCRIPTION_TOKEN=<private-random-token>
 ```
 
 需要在云安全组和服务器防火墙放行同一个端口的 TCP/UDP，默认是 `8388/tcp` 和 `8388/udp`。
 
-## Clash Verge
+## 订阅 URL
 
-手动添加 Shadowsocks 节点：
+设置 `CLASH_SUBSCRIPTION_TOKEN` 后，Caddy 会在私密路径提供 Clash YAML 订阅：
+
+```text
+https://api.zero007.chat/clash/<CLASH_SUBSCRIPTION_TOKEN>.yaml
+```
+
+在服务器上可用下面的命令查看完整订阅 URL：
+
+```sh
+sudo awk -F= '/^CLASH_SUBSCRIPTION_TOKEN=/{print "https://api.zero007.chat/clash/"$2".yaml"}' /opt/sub2api-deploy/.env
+```
+
+不要把订阅 URL、真实 `CLASH_NODE_PASSWORD` 或 `CLASH_SUBSCRIPTION_TOKEN` 写入 Git、README、截图或公开对话日志。拿到订阅 URL 的人等同于拿到节点访问权限。
+
+## 手动节点
+
+如果不使用订阅，也可以手动添加 Shadowsocks 节点：
 
 ```yaml
 proxies:
@@ -36,7 +54,7 @@ proxies:
     udp: true
 ```
 
-不要把真实 `CLASH_NODE_PASSWORD` 写入 Git、README、截图或对话日志。
+如果 Clash Verge 开启代理后解析域名存在回环或劫持问题，可以把 `CLASH_NODE_SERVER` 改成服务器公网 IP，再重新部署生成订阅。
 
 ## 边界
 

@@ -378,11 +378,65 @@ inactive_slot() {
   esac
 }
 
+yaml_single_quote() {
+  printf '%s' "$1" | sed "s/'/''/g"
+}
+
 write_caddyfile() {
   local slot="$1"
-  local service
+  local service subscription_path subscription_file node_server node_port node_method node_password
   service="$(slot_service "$slot")"
   mkdir -p "$DEPLOY_DIR/caddy"
+
+  if [ -n "${CLASH_SUBSCRIPTION_TOKEN:-}" ]; then
+    printf '%s' "$CLASH_SUBSCRIPTION_TOKEN" | grep -Eq '^[A-Za-z0-9_-]{16,}$' \
+      || fail "CLASH_SUBSCRIPTION_TOKEN must be at least 16 chars and contain only letters, numbers, '_' or '-'."
+    [ -n "${CLASH_NODE_PASSWORD:-}" ] || fail "CLASH_NODE_PASSWORD is required when CLASH_SUBSCRIPTION_TOKEN is set."
+
+    subscription_path="/clash/${CLASH_SUBSCRIPTION_TOKEN}.yaml"
+    node_server="${CLASH_NODE_SERVER:-api.zero007.chat}"
+    node_port="${CLASH_NODE_PORT:-8388}"
+    node_method="${CLASH_NODE_METHOD:-aes-256-gcm}"
+    node_password="$(yaml_single_quote "$CLASH_NODE_PASSWORD")"
+    mkdir -p "$DEPLOY_DIR/caddy/subscriptions"
+    subscription_file="$DEPLOY_DIR/caddy/subscriptions/${CLASH_SUBSCRIPTION_TOKEN}.yaml"
+
+    cat > "$subscription_file" <<EOF
+proxies:
+  - name: zero007-sub2api-ss
+    type: ss
+    server: $node_server
+    port: $node_port
+    cipher: $node_method
+    password: '$node_password'
+    udp: true
+proxy-groups:
+  - name: PROXY
+    type: select
+    proxies:
+      - zero007-sub2api-ss
+rules:
+  - MATCH,PROXY
+EOF
+    chmod 0644 "$subscription_file"
+
+    cat > "$DEPLOY_DIR/caddy/Caddyfile" <<EOF
+:8080 {
+	handle $subscription_path {
+		root * /srv/clash-subscriptions
+		rewrite * /${CLASH_SUBSCRIPTION_TOKEN}.yaml
+		header Content-Type "text/yaml; charset=utf-8"
+		file_server
+	}
+
+	handle {
+		reverse_proxy $service:8080
+	}
+}
+EOF
+    return
+  fi
+
   cat > "$DEPLOY_DIR/caddy/Caddyfile" <<EOF
 :8080 {
 	reverse_proxy $service:8080
@@ -392,11 +446,10 @@ EOF
 
 reload_caddy() {
   local caddy_container
+  compose up -d caddy
   caddy_container="$(compose ps -q --status running caddy 2>/dev/null || true)"
   if [ -n "$caddy_container" ]; then
     compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
-  else
-    compose up -d caddy
   fi
 }
 
@@ -495,8 +548,17 @@ wait_for_service_health() {
 
 check_service_logs() {
   local service="$1"
-  local bad
-  bad="$(compose logs --tail=160 "$service" 2>/dev/null | grep -Ei 'panic|fatal|database.*failed|connection refused|migration.*failed' || true)"
+  local bad pattern
+  case "$service" in
+    sing-box|clash-node)
+      pattern='panic|fatal|migration.*failed'
+      ;;
+    *)
+      pattern='panic|fatal|database.*failed|connection refused|migration.*failed'
+      ;;
+  esac
+
+  bad="$(compose logs --tail=160 "$service" 2>/dev/null | grep -Ei "$pattern" || true)"
   if [ -n "$bad" ]; then
     printf '%s\n' "$bad"
     return 1

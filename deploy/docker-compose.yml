@@ -145,6 +145,7 @@ services:
       - "${BIND_HOST:-127.0.0.1}:${SERVER_PORT:-8080}:8080"
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/subscriptions:/srv/clash-subscriptions:ro
       - ./caddy_data:/data
       - ./caddy_config:/config
     networks:
