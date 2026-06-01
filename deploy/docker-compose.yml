@@ -86,37 +86,39 @@ services:
     image: ghcr.io/sagernet/sing-box@sha256:da0e2331395c9025a85fa58892772b4cdbe5f2e530e93defeec3968175d06c6d
     container_name: sub2api-clash-node
     restart: unless-stopped
-    entrypoint: ["/bin/sh", "-ec"]
-    command: |
-      : "$${CLASH_NODE_PASSWORD:?CLASH_NODE_PASSWORD is required}"
-      cat > /tmp/sing-box-clash-node.json <<EOF
-      {
-        "log": {
-          "level": "$${CLASH_NODE_LOG_LEVEL:-warn}",
-          "timestamp": true
-        },
-        "inbounds": [
-          {
-            "type": "shadowsocks",
-            "tag": "clash-verge-ss",
-            "listen": "0.0.0.0",
-            "listen_port": $${CLASH_NODE_PORT:-8388},
-            "method": "$${CLASH_NODE_METHOD:-aes-256-gcm}",
-            "password": "$${CLASH_NODE_PASSWORD}"
+    entrypoint: ["/bin/sh"]
+    command:
+      - -ec
+      - |
+        : "$${CLASH_NODE_PASSWORD:?CLASH_NODE_PASSWORD is required}"
+        cat > /tmp/sing-box-clash-node.json <<EOF
+        {
+          "log": {
+            "level": "$${CLASH_NODE_LOG_LEVEL:-warn}",
+            "timestamp": true
+          },
+          "inbounds": [
+            {
+              "type": "shadowsocks",
+              "tag": "clash-verge-ss",
+              "listen": "0.0.0.0",
+              "listen_port": $${CLASH_NODE_PORT:-8388},
+              "method": "$${CLASH_NODE_METHOD:-aes-256-gcm}",
+              "password": "$${CLASH_NODE_PASSWORD}"
+            }
+          ],
+          "outbounds": [
+            {
+              "type": "direct",
+              "tag": "direct"
+            }
+          ],
+          "route": {
+            "final": "direct"
           }
-        ],
-        "outbounds": [
-          {
-            "type": "direct",
-            "tag": "direct"
-          }
-        ],
-        "route": {
-          "final": "direct"
         }
-      }
-      EOF
-      exec /usr/local/bin/sing-box run -c /tmp/sing-box-clash-node.json
+        EOF
+        exec /usr/local/bin/sing-box run -c /tmp/sing-box-clash-node.json
     environment:
       - TZ=${TZ:-Asia/Shanghai}
       - CLASH_NODE_PORT=${CLASH_NODE_PORT:-8388}
