@@ -138,6 +138,82 @@ services:
       retries: 3
       start_period: 10s
 
+  vpn-ws-node:
+    image: ghcr.io/sagernet/sing-box@sha256:da0e2331395c9025a85fa58892772b4cdbe5f2e530e93defeec3968175d06c6d
+    container_name: sub2api-vpn-ws-node
+    restart: unless-stopped
+    entrypoint: ["/bin/sh"]
+    command:
+      - -ec
+      - |
+        : "$${VPN_WS_UUID:?VPN_WS_UUID is required}"
+        : "$${VPN_WS_TROJAN_PASSWORD:?VPN_WS_TROJAN_PASSWORD is required}"
+        cat > /tmp/sing-box-vpn-ws-node.json <<EOF
+        {
+          "log": {
+            "level": "$${VPN_WS_LOG_LEVEL:-warn}",
+            "timestamp": true
+          },
+          "inbounds": [
+            {
+              "type": "vless",
+              "tag": "vless-ws",
+              "listen": "0.0.0.0",
+              "listen_port": 18080,
+              "users": [
+                {
+                  "uuid": "$${VPN_WS_UUID}"
+                }
+              ],
+              "transport": {
+                "type": "ws",
+                "path": "$${VPN_WS_VLESS_PATH:-/vless}"
+              }
+            },
+            {
+              "type": "trojan",
+              "tag": "trojan-ws",
+              "listen": "0.0.0.0",
+              "listen_port": 18081,
+              "users": [
+                {
+                  "password": "$${VPN_WS_TROJAN_PASSWORD}"
+                }
+              ],
+              "transport": {
+                "type": "ws",
+                "path": "$${VPN_WS_TROJAN_PATH:-/trojan}"
+              }
+            }
+          ],
+          "outbounds": [
+            {
+              "type": "direct",
+              "tag": "direct"
+            }
+          ],
+          "route": {
+            "final": "direct"
+          }
+        }
+        EOF
+        exec /usr/local/bin/sing-box run -c /tmp/sing-box-vpn-ws-node.json
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+      - VPN_WS_UUID=${VPN_WS_UUID:?VPN_WS_UUID is required}
+      - VPN_WS_TROJAN_PASSWORD=${VPN_WS_TROJAN_PASSWORD:?VPN_WS_TROJAN_PASSWORD is required}
+      - VPN_WS_VLESS_PATH=${VPN_WS_VLESS_PATH:-/vless}
+      - VPN_WS_TROJAN_PATH=${VPN_WS_TROJAN_PATH:-/trojan}
+      - VPN_WS_LOG_LEVEL=${VPN_WS_LOG_LEVEL:-warn}
+    networks:
+      - sub2api-network
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/sing-box-vpn-ws-node.json && /usr/local/bin/sing-box check -c /tmp/sing-box-vpn-ws-node.json >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
   caddy:
     image: caddy:2-alpine@sha256:3739ea4f0c877259a693d932693cf8f3408e9a9497c004f031b0e830e93e1546
     container_name: sub2api-caddy

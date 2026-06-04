@@ -61,6 +61,77 @@ load_env() {
   set +a
 }
 
+env_has_key() {
+  local key="$1"
+  grep -Eq "^[[:space:]]*${key}=" "$DEPLOY_DIR/.env"
+}
+
+append_env_if_missing() {
+  local key="$1"
+  local value="$2"
+  if ! env_has_key "$key"; then
+    printf '%s=%s\n' "$key" "$value" >> "$DEPLOY_DIR/.env"
+    export "$key=$value"
+  fi
+}
+
+generate_uuid() {
+  if command -v uuidgen >/dev/null 2>&1; then
+    uuidgen | tr '[:upper:]' '[:lower:]'
+  elif [ -r /proc/sys/kernel/random/uuid ]; then
+    cat /proc/sys/kernel/random/uuid
+  else
+    python3 - <<'PY'
+import uuid
+print(uuid.uuid4())
+PY
+  fi
+}
+
+generate_secret() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -base64 32 | tr -d '\n'
+  else
+    python3 - <<'PY'
+import secrets
+print(secrets.token_urlsafe(32))
+PY
+  fi
+}
+
+ensure_vpn_ws_env() {
+  local changed=0
+
+  if ! env_has_key VPN_WS_ENABLED; then
+    append_env_if_missing VPN_WS_ENABLED true
+    changed=1
+  fi
+  if ! env_has_key VPN_WS_SERVER; then
+    append_env_if_missing VPN_WS_SERVER vpn.zero007.chat
+    changed=1
+  fi
+  if ! env_has_key VPN_WS_VLESS_PATH; then
+    append_env_if_missing VPN_WS_VLESS_PATH /vless
+    changed=1
+  fi
+  if ! env_has_key VPN_WS_TROJAN_PATH; then
+    append_env_if_missing VPN_WS_TROJAN_PATH /trojan
+    changed=1
+  fi
+  if ! env_has_key VPN_WS_UUID; then
+    append_env_if_missing VPN_WS_UUID "$(generate_uuid)"
+    changed=1
+  fi
+  if ! env_has_key VPN_WS_TROJAN_PASSWORD; then
+    append_env_if_missing VPN_WS_TROJAN_PASSWORD "$(generate_secret)"
+    changed=1
+  fi
+
+  if [ "$changed" -eq 1 ]; then
+    log "Initialized missing VPN WS node environment values in $DEPLOY_DIR/.env."
+  fi
+}
+
 validate_env() {
   local missing=0
   local required=(POSTGRES_PASSWORD JWT_SECRET TOTP_ENCRYPTION_KEY REDIS_PASSWORD)
@@ -145,6 +216,7 @@ validate_image_pins() {
   local found_postgres=0
   local found_redis=0
   local found_sing_box=0
+  local found_vpn_ws_node=0
 
   config="$(compose_file "$file" --profile bluegreen config)"
   while IFS='|' read -r service image; do
@@ -155,6 +227,7 @@ validate_image_pins() {
       postgres) found_postgres=1 ;;
       redis) found_redis=1 ;;
       sing-box) found_sing_box=1 ;;
+      vpn-ws-node) found_vpn_ws_node=1 ;;
       clash-node) ;;
       *) continue ;;
     esac
@@ -181,6 +254,7 @@ validate_image_pins() {
   [ "$found_postgres" -eq 1 ] || { log "Missing compose service image: postgres"; missing=1; }
   [ "$found_redis" -eq 1 ] || { log "Missing compose service image: redis"; missing=1; }
   [ "$found_sing_box" -eq 1 ] || { log "Missing compose service image: sing-box"; missing=1; }
+  [ "$found_vpn_ws_node" -eq 1 ] || { log "Missing compose service image: vpn-ws-node"; missing=1; }
 
   [ "$missing" -eq 0 ] || fail "Compose image pin validation failed."
 }
@@ -318,6 +392,8 @@ validate_image_migrations() {
 validate_compose() {
   load_env
   prepare_dirs
+  ensure_vpn_ws_env
+  load_env
   validate_env
   compose config >/dev/null
   validate_image_pins "$COMPOSE_FILE"
@@ -328,6 +404,8 @@ validate_compose() {
 validate_candidate_compose() {
   load_env
   prepare_dirs
+  ensure_vpn_ws_env
+  load_env
   validate_env
   [ -f "$CANDIDATE_COMPOSE" ] || fail "Candidate compose file was not found: $CANDIDATE_COMPOSE"
   compose_file "$CANDIDATE_COMPOSE" config >/dev/null
@@ -385,8 +463,13 @@ yaml_single_quote() {
 write_caddyfile() {
   local slot="$1"
   local service subscription_path mobile_subscription_path subscription_file mobile_subscription_file node_server node_port node_method node_password
+  local vpn_ws_enabled vpn_ws_server vpn_ws_vless_path vpn_ws_trojan_path vpn_ws_uuid vpn_ws_trojan_password
   service="$(slot_service "$slot")"
   mkdir -p "$DEPLOY_DIR/caddy"
+  if [ -f "$DEPLOY_DIR/.env" ]; then
+    ensure_vpn_ws_env
+    load_env
+  fi
 
   if [ -n "${CLASH_SUBSCRIPTION_TOKEN:-}" ]; then
     printf '%s' "$CLASH_SUBSCRIPTION_TOKEN" | grep -Eq '^[A-Za-z0-9_-]{16,}$' \
@@ -399,6 +482,12 @@ write_caddyfile() {
     node_port="${CLASH_NODE_PORT:-8388}"
     node_method="${CLASH_NODE_METHOD:-aes-256-gcm}"
     node_password="$(yaml_single_quote "$CLASH_NODE_PASSWORD")"
+    vpn_ws_enabled="${VPN_WS_ENABLED:-true}"
+    vpn_ws_server="${VPN_WS_SERVER:-vpn.zero007.chat}"
+    vpn_ws_vless_path="${VPN_WS_VLESS_PATH:-/vless}"
+    vpn_ws_trojan_path="${VPN_WS_TROJAN_PATH:-/trojan}"
+    vpn_ws_uuid="${VPN_WS_UUID:-}"
+    vpn_ws_trojan_password="$(yaml_single_quote "${VPN_WS_TROJAN_PASSWORD:-}")"
     mkdir -p "$DEPLOY_DIR/caddy/subscriptions"
     subscription_file="$DEPLOY_DIR/caddy/subscriptions/${CLASH_SUBSCRIPTION_TOKEN}.yaml"
     mobile_subscription_file="$DEPLOY_DIR/caddy/subscriptions/${CLASH_SUBSCRIPTION_TOKEN}.mobile.yaml"
@@ -435,6 +524,16 @@ dns:
   default-nameserver:
     - 223.5.5.5
     - 119.29.29.29
+  proxy-server-nameserver:
+    - https://1.1.1.1/dns-query
+    - https://8.8.8.8/dns-query
+  nameserver-policy:
+    "$vpn_ws_server":
+      - https://1.1.1.1/dns-query
+      - https://8.8.8.8/dns-query
+    "$node_server":
+      - https://1.1.1.1/dns-query
+      - https://8.8.8.8/dns-query
   nameserver:
     - https://dns.alidns.com/dns-query
     - https://doh.pub/dns-query
@@ -455,12 +554,64 @@ proxies:
     cipher: $node_method
     password: '$node_password'
     udp: true
+EOF
+    if [ "$vpn_ws_enabled" = "true" ] && [ -n "$vpn_ws_uuid" ]; then
+      cat >> "$subscription_file" <<EOF
+  - name: zero007-vless-ws-cf
+    type: vless
+    server: $vpn_ws_server
+    port: 443
+    uuid: $vpn_ws_uuid
+    network: ws
+    tls: true
+    skip-cert-verify: false
+    client-fingerprint: chrome
+    udp: false
+    servername: $vpn_ws_server
+    ws-opts:
+      path: $vpn_ws_vless_path
+      headers:
+        Host: $vpn_ws_server
+EOF
+    fi
+    if [ "$vpn_ws_enabled" = "true" ] && [ -n "${VPN_WS_TROJAN_PASSWORD:-}" ]; then
+      cat >> "$subscription_file" <<EOF
+  - name: zero007-trojan-ws-cf
+    type: trojan
+    server: $vpn_ws_server
+    port: 443
+    password: '$vpn_ws_trojan_password'
+    network: ws
+    tls: true
+    skip-cert-verify: false
+    client-fingerprint: chrome
+    udp: false
+    sni: $vpn_ws_server
+    ws-opts:
+      path: $vpn_ws_trojan_path
+      headers:
+        Host: $vpn_ws_server
+EOF
+    fi
+    cat >> "$subscription_file" <<EOF
 
 proxy-groups:
   - name: PROXY
     type: select
     proxies:
       - zero007-sub2api-ss
+EOF
+    if [ "$vpn_ws_enabled" = "true" ] && [ -n "$vpn_ws_uuid" ]; then
+      cat >> "$subscription_file" <<'EOF'
+      - zero007-vless-ws-cf
+EOF
+    fi
+    if [ "$vpn_ws_enabled" = "true" ] && [ -n "${VPN_WS_TROJAN_PASSWORD:-}" ]; then
+      cat >> "$subscription_file" <<'EOF'
+      - zero007-trojan-ws-cf
+EOF
+    fi
+    cat >> "$subscription_file" <<'EOF'
       - DIRECT
   - name: Final
     type: select
@@ -511,12 +662,64 @@ proxies:
     cipher: $node_method
     password: '$node_password'
     udp: true
+EOF
+    if [ "$vpn_ws_enabled" = "true" ] && [ -n "$vpn_ws_uuid" ]; then
+      cat >> "$mobile_subscription_file" <<EOF
+  - name: zero007-vless-ws-cf
+    type: vless
+    server: $vpn_ws_server
+    port: 443
+    uuid: $vpn_ws_uuid
+    network: ws
+    tls: true
+    skip-cert-verify: false
+    client-fingerprint: chrome
+    udp: false
+    servername: $vpn_ws_server
+    ws-opts:
+      path: $vpn_ws_vless_path
+      headers:
+        Host: $vpn_ws_server
+EOF
+    fi
+    if [ "$vpn_ws_enabled" = "true" ] && [ -n "${VPN_WS_TROJAN_PASSWORD:-}" ]; then
+      cat >> "$mobile_subscription_file" <<EOF
+  - name: zero007-trojan-ws-cf
+    type: trojan
+    server: $vpn_ws_server
+    port: 443
+    password: '$vpn_ws_trojan_password'
+    network: ws
+    tls: true
+    skip-cert-verify: false
+    client-fingerprint: chrome
+    udp: false
+    sni: $vpn_ws_server
+    ws-opts:
+      path: $vpn_ws_trojan_path
+      headers:
+        Host: $vpn_ws_server
+EOF
+    fi
+    cat >> "$mobile_subscription_file" <<EOF
 
 proxy-groups:
   - name: PROXY
     type: select
     proxies:
       - zero007-sub2api-ss
+EOF
+    if [ "$vpn_ws_enabled" = "true" ] && [ -n "$vpn_ws_uuid" ]; then
+      cat >> "$mobile_subscription_file" <<'EOF'
+      - zero007-vless-ws-cf
+EOF
+    fi
+    if [ "$vpn_ws_enabled" = "true" ] && [ -n "${VPN_WS_TROJAN_PASSWORD:-}" ]; then
+      cat >> "$mobile_subscription_file" <<'EOF'
+      - zero007-trojan-ws-cf
+EOF
+    fi
+    cat >> "$mobile_subscription_file" <<'EOF'
       - DIRECT
 
 rules:
@@ -550,6 +753,14 @@ EOF
 
     cat > "$DEPLOY_DIR/caddy/Caddyfile" <<EOF
 :8080 {
+	handle $vpn_ws_vless_path* {
+		reverse_proxy vpn-ws-node:18080
+	}
+
+	handle $vpn_ws_trojan_path* {
+		reverse_proxy vpn-ws-node:18081
+	}
+
 	handle $subscription_path {
 		root * /srv/clash-subscriptions
 		rewrite * /${CLASH_SUBSCRIPTION_TOKEN}.yaml
@@ -564,6 +775,11 @@ EOF
 		file_server
 	}
 
+	@vpn_host host $vpn_ws_server
+	handle @vpn_host {
+		respond "not found" 404
+	}
+
 	handle {
 		reverse_proxy $service:8080
 	}
@@ -574,7 +790,22 @@ EOF
 
   cat > "$DEPLOY_DIR/caddy/Caddyfile" <<EOF
 :8080 {
-	reverse_proxy $service:8080
+	handle ${VPN_WS_VLESS_PATH:-/vless}* {
+		reverse_proxy vpn-ws-node:18080
+	}
+
+	handle ${VPN_WS_TROJAN_PATH:-/trojan}* {
+		reverse_proxy vpn-ws-node:18081
+	}
+
+	@vpn_host host ${VPN_WS_SERVER:-vpn.zero007.chat}
+	handle @vpn_host {
+		respond "not found" 404
+	}
+
+	handle {
+		reverse_proxy $service:8080
+	}
 }
 EOF
 }
@@ -685,7 +916,7 @@ check_service_logs() {
   local service="$1"
   local bad pattern
   case "$service" in
-    sing-box|clash-node)
+    sing-box|clash-node|vpn-ws-node)
       pattern='panic|fatal|migration.*failed'
       ;;
     *)
@@ -708,7 +939,7 @@ compose_has_service() {
 
 ensure_sidecar_services() {
   local service
-  for service in sing-box clash-node; do
+  for service in sing-box clash-node vpn-ws-node; do
     if compose_has_service "$service"; then
       log "Ensuring sidecar service: $service"
       compose --profile bluegreen up -d "$service"
@@ -1029,6 +1260,178 @@ logs() {
   compose logs --tail="${SUB2API_LOG_TAIL:-200}" caddy "$(slot_service "$(active_slot)")" postgres redis
 }
 
+sync_sidecar_proxies() {
+  load_env
+  prepare_dirs
+  require_cmd python3
+
+  if ! compose_has_service sing-box; then
+    fail "Compose service sing-box is not defined."
+  fi
+
+  mkdir -p "$DEPLOY_DIR/sing-box"
+  local tmp_config tmp_rows tmp_ports target_config backup_config
+  tmp_config="$(mktemp /tmp/sub2api-sing-box-sidecar.XXXXXX.json)"
+  tmp_rows="$(mktemp /tmp/sub2api-sing-box-sidecar.XXXXXX.tsv)"
+  tmp_ports="$(mktemp /tmp/sub2api-sing-box-sidecar.XXXXXX.ports)"
+  target_config="$DEPLOY_DIR/sing-box/config.json"
+
+  compose exec -T postgres psql -U "${POSTGRES_USER:-sub2api}" -d "${POSTGRES_DB:-sub2api}" -At -F $'\t' <<'SQL' > "$tmp_rows"
+SELECT n.id, n.raw_uri, n.name, e.listen_port
+FROM proxy_subscription_nodes n
+JOIN proxy_sidecar_endpoints e ON e.node_id = n.id AND e.deleted_at IS NULL
+WHERE n.deleted_at IS NULL
+  AND n.selected = TRUE
+  AND n.sidecar_required = TRUE
+ORDER BY e.listen_port, n.id;
+SQL
+
+  python3 - "$tmp_config" "$tmp_rows" "$tmp_ports" <<'PY'
+import json
+import sys
+import urllib.parse
+
+out_path = sys.argv[1]
+rows_path = sys.argv[2]
+ports_path = sys.argv[3]
+inbounds = []
+outbounds = [{"type": "direct", "tag": "direct"}]
+rules = []
+generated = 0
+generated_ports = []
+unsupported = {}
+
+with open(rows_path, "r", encoding="utf-8") as rows:
+    for raw_line in rows:
+        line = raw_line.rstrip("\n")
+        if not line:
+            continue
+        try:
+            node_id, raw_uri, name, listen_port = line.split("\t", 3)
+        except ValueError:
+            continue
+        parsed = urllib.parse.urlsplit(raw_uri)
+        scheme = parsed.scheme.lower()
+        if scheme != "anytls":
+            unsupported[scheme or "unknown"] = unsupported.get(scheme or "unknown", 0) + 1
+            continue
+
+        host = parsed.hostname or ""
+        password = urllib.parse.unquote(parsed.username or "")
+        server_port = parsed.port or 443
+        port = int(listen_port)
+        query = urllib.parse.parse_qs(parsed.query)
+        server_name = query.get("sni", query.get("servername", query.get("server_name", [host])))[0]
+        insecure_raw = query.get("insecure", query.get("allowInsecure", query.get("skip-cert-verify", ["false"])))[0]
+        insecure = str(insecure_raw).lower() in ("1", "true", "yes")
+        if not host or not password:
+            unsupported["invalid-anytls"] = unsupported.get("invalid-anytls", 0) + 1
+            continue
+
+        inbound_tag = f"in-{port}"
+        outbound_tag = f"node-{node_id}"
+        inbounds.append({
+            "type": "socks",
+            "tag": inbound_tag,
+            "listen": "0.0.0.0",
+            "listen_port": port
+        })
+        outbound = {
+            "type": "anytls",
+            "tag": outbound_tag,
+            "server": host,
+            "server_port": server_port,
+            "password": password,
+            "tls": {
+                "enabled": True,
+                "server_name": server_name,
+                "insecure": insecure
+            }
+        }
+        fingerprint = query.get("fp", query.get("fingerprint", [""]))[0]
+        if fingerprint:
+            outbound["tls"]["utls"] = {"enabled": True, "fingerprint": fingerprint}
+        outbounds.append(outbound)
+        rules.append({"inbound": [inbound_tag], "outbound": outbound_tag})
+        generated_ports.append(str(port))
+        generated += 1
+
+config = {
+    "log": {"level": "warn", "timestamp": True},
+    "inbounds": inbounds,
+    "outbounds": outbounds,
+    "route": {"rules": rules, "final": "direct"}
+}
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(config, f, ensure_ascii=False, indent=2)
+with open(ports_path, "w", encoding="utf-8") as f:
+    f.write("\n".join(generated_ports))
+print(f"generated={generated}")
+if unsupported:
+    print("unsupported=" + ",".join(f"{k}:{v}" for k, v in sorted(unsupported.items())))
+PY
+
+  log "Validating generated sing-box sidecar config."
+  docker run --rm -v "$tmp_config:/etc/sing-box/config.json:ro" \
+    ghcr.io/sagernet/sing-box@sha256:da0e2331395c9025a85fa58892772b4cdbe5f2e530e93defeec3968175d06c6d \
+    check -c /etc/sing-box/config.json
+
+  if [ -f "$target_config" ]; then
+    backup_config="$target_config.bak.$(date -u '+%Y%m%dT%H%M%SZ')"
+    cp -a "$target_config" "$backup_config"
+    log "Backed up sing-box config to $backup_config"
+  fi
+  cp -a "$tmp_config" "$target_config"
+  rm -f "$tmp_config"
+
+  log "Restarting sing-box sidecar."
+  compose restart sing-box
+  wait_for_service_health sing-box 12 3 || fail "sing-box failed health check after sidecar config sync."
+
+  log "Marking generated sidecar endpoints active."
+  compose exec -T postgres psql -U "${POSTGRES_USER:-sub2api}" -d "${POSTGRES_DB:-sub2api}" -v ON_ERROR_STOP=1 -v generated_ports="$(paste -sd, "$tmp_ports")" <<'SQL'
+UPDATE proxy_sidecar_endpoints e
+SET status = 'ready',
+    last_checked_at = NOW(),
+    last_started_at = NOW(),
+    last_error = NULL,
+    updated_at = NOW()
+FROM proxy_subscription_nodes n
+WHERE e.node_id = n.id
+  AND e.listen_port = ANY(string_to_array(:'generated_ports', ',')::int[])
+  AND e.deleted_at IS NULL
+  AND n.deleted_at IS NULL
+  AND n.selected = TRUE
+  AND n.sidecar_required = TRUE
+  AND n.protocol = 'anytls';
+
+UPDATE proxies p
+SET host = 'sing-box',
+    status = 'active',
+    last_checked_at = NOW(),
+    updated_at = NOW()
+FROM proxy_sidecar_endpoints e
+JOIN proxy_subscription_nodes n ON n.id = e.node_id
+WHERE e.proxy_id = p.id
+  AND e.listen_port = ANY(string_to_array(:'generated_ports', ',')::int[])
+  AND e.deleted_at IS NULL
+  AND n.deleted_at IS NULL
+  AND n.selected = TRUE
+  AND n.sidecar_required = TRUE
+  AND n.protocol = 'anytls'
+  AND p.proxy_type = 'sidecar';
+
+SELECT 'sidecar_endpoint|' || e.listen_port || '|' || e.status || '|' || p.host || '|' || p.status
+FROM proxy_sidecar_endpoints e
+JOIN proxies p ON p.id = e.proxy_id
+WHERE e.deleted_at IS NULL
+ORDER BY e.listen_port;
+SQL
+  rm -f "$tmp_rows" "$tmp_ports"
+
+  log "Sidecar proxy sync completed."
+}
+
 trim() {
   local value="$*"
   value="${value#"${value%%[![:space:]]*}"}"
@@ -1306,5 +1709,6 @@ case "$ACTION" in
   rollback) rollback ;;
   status) status ;;
   logs) logs ;;
+  sync-sidecar-proxies) sync_sidecar_proxies ;;
   *) fail "Unknown action: $ACTION" ;;
 esac
