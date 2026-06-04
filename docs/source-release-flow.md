@@ -24,8 +24,8 @@ git@github.com:zeroliao/sub2api.git
 
 ## 发布顺序
 
-1. 分配下一个版本号，两个仓库使用同一个版本号。
-2. 在需要改动的仓库创建 `dev/<version>`；未改动仓库记录当前 `main` commit 或上一个成功 tag。
+1. 从两个仓库本地/远程 `dev/*`、`release/*`、`v*` tag，以及运维仓库 `docs/releases/*.md` 计算全局最大已占用版本号；分配全局最大已占用版本号 + 1，两个仓库使用同一个版本号，历史缺口不可复用。
+2. 在运维仓库创建 `docs/releases/<version>.md`；在需要改动的仓库创建 `dev/<version>`；未改动仓库记录当前 `main` commit 或上一个成功 tag。
 3. 在 `sub2api-src/dev/<version>` 完成源码改动；如需同步 upstream，必须由用户主动提出并纳入该版本内容。
    - 正常情况下，任何源码修复都先提交到 `dev/<version>`，再同步到 `release/<version>`；不要直接把 `release/<version>` 当开发分支使用。
    - 生产紧急修复如果临时直接进入 `release/<version>`，部署成功后必须立即回填到 `dev/<version>`。
