@@ -23,6 +23,19 @@ psql: warning: extra command-line argument "from" ignored
 
 ## Preferred Patterns
 
+Set the current PowerShell session to UTF-8 before reading Chinese files or
+capturing remote output:
+
+```powershell
+$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+chcp 65001
+Get-Content -Encoding utf8 .\path\to\file.md
+```
+
+If text looks like mojibake in the terminal, first verify the file with
+`Get-Content -Encoding utf8` before editing it. In several cases the file was
+correct UTF-8 and only the PowerShell display path was wrong.
+
 For simple read-only SSH commands, use one command per execution and keep quoting
 minimal:
 
@@ -60,4 +73,3 @@ This keeps SQL intact across PowerShell, SSH, Bash, and `psql`.
 - Do not commit `key.md`, `.env`, private keys, or server-only credentials.
 - If using `grep`, avoid queries that print secret values. Mask values with
   `sed -E 's/=.*/=<set>/'` when checking environment variables.
-
