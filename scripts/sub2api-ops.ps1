@@ -186,7 +186,7 @@ chmod +x remote/sub2api-remote-ops.sh
   New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
   try {
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($localHelper, $script, $utf8NoBom)
+    [System.IO.File]::WriteAllText($localHelper, ($script -replace "`r`n", "`n"), $utf8NoBom)
     Invoke-Checked ($scpBase + @($localHelper, "${target}:$remoteHelper"))
     Invoke-Checked ($sshBase + @($target, "chmod +x '$remoteHelper'"))
     Invoke-Checked ($sshBase + @($target, "bash '$remoteHelper' $(ConvertTo-ShellSingleQuoted $RepoUrl) $(ConvertTo-ShellSingleQuoted $Branch) $(ConvertTo-ShellSingleQuoted $Commit) $(ConvertTo-ShellSingleQuoted $RemoteOpsDir) $(ConvertTo-ShellSingleQuoted $RemoteGitSshKey); rc=`$?; rm -f '$remoteHelper'; exit `$rc"))
