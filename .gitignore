@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.ops.example
+key.md
 *.log
 *.tmp
 backups/
@@ -9,4 +10,3 @@ postgres_data/
 redis_data/
 .DS_Store
 Thumbs.db
-

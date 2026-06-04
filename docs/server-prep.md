@@ -40,6 +40,7 @@ POSTGRES_PASSWORD=<secure random string>
 REDIS_PASSWORD=<secure random string>
 JWT_SECRET=<secure random string>
 TOTP_ENCRYPTION_KEY=<secure random string>
+ABUSEIPDB_API_KEY=<optional AbuseIPDB API key for proxy IP reputation checks>
 ADMIN_EMAIL=<admin email>
 ADMIN_PASSWORD=<optional, only needed for first setup>
 SERVER_PORT=8080
@@ -68,3 +69,19 @@ recent sub2api logs for fatal patterns
 digest-pinned compose images
 destructive unapplied SQL migrations
 ```
+
+## Proxy Reputation API Key
+
+Proxy subscription reputation checks should use an environment variable:
+
+```text
+ABUSEIPDB_API_KEY=<optional AbuseIPDB API key>
+```
+
+Configure subscription sources with:
+
+```text
+env:ABUSEIPDB_API_KEY
+```
+
+Do not store production API keys in `key.md` or commit them to Git.
