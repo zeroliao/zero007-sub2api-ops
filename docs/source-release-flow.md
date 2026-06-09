@@ -28,9 +28,10 @@ git@github.com:zeroliao/sub2api.git
 2. 在运维仓库创建 `docs/releases/<version>.md`；在需要改动的仓库创建 `dev/<version>`；未改动仓库记录当前 `main` commit 或上一个成功 tag。
 3. 在 `sub2api-src/dev/<version>` 完成源码改动；如需同步 upstream，必须由用户主动提出并纳入该版本内容。
    - 正常情况下，任何源码修复都先提交到 `dev/<version>`，再同步到 `release/<version>`；不要直接把 `release/<version>` 当开发分支使用。
-   - 生产紧急修复如果临时直接进入 `release/<version>`，部署成功后必须立即回填到 `dev/<version>`。
+   - 同一批逻辑改动只能沿一条提交链流动；不要在 `dev/<version>`、`release/<version>` 和 `main` 上分别重新提交或重复 cherry-pick 同一补丁。
+   - 生产紧急修复如果临时直接进入 `release/<version>`，部署成功后必须立即把原始提交回填到 `dev/<version>`，优先合并 release 或 cherry-pick 原提交，不要手工重做一份内容相同的新提交。
 4. 针对受影响区域运行后端、前端或静态检查。
-5. 将 `sub2api-src/dev/<version>` 同步到 `sub2api-src/release/<version>`。
+5. 将 `sub2api-src/dev/<version>` 同步到 `sub2api-src/release/<version>`，优先使用 fast-forward；如果不能 fast-forward，先用 `git log --left-right --cherry-pick` 检查分叉和重复补丁。
 6. 推送 `sub2api-src/release/<version>`，由 `GHCR Image` workflow 构建候选镜像并推送到 GHCR。
 7. 等待 `GHCR Image` workflow 成功，从 Summary 复制 immutable image digest 并写入版本记录。
 8. 在 `sub2api/release/<version>` 更新 `deploy/docker-compose.yml`，使用同一个 digest。
@@ -42,11 +43,11 @@ git@github.com:zeroliao/sub2api.git
 14. 运行 `backup`。
 15. 应用发布优先运行 `start-bluegreen-deploy` 或 `bluegreen-deploy`；如明确选择传统全量原地部署，则运行 `deploy`。
 16. 验证健康状态、日志、活跃槽位和本版本核心功能。
-17. 部署成功后，将受影响仓库的 `release/<version>` 合入 `main`。
+17. 部署成功后，将受影响仓库的 `release/<version>` 合入 `main`，优先使用 fast-forward；如果不能 fast-forward，先停止排查分叉原因。
 18. 两个仓库都创建 `v<version>` tag，未改动仓库的 tag 指向本次部署实际使用的 `main` commit。
 19. `sub2api-src` 的 `release.yml` 只做 GitHub Release 和二进制归档，不重新构建 Docker 镜像。
 20. 如需要镜像版本 tag，手动运行 `Promote Verified Image` workflow，将已验证 digest 提升为 `v<version>` / `<version>` tag。
-21. 将最新 `main` 同步到所有仍保留的 `dev/<version>`；如果该版本分支还处于 `开发中` 或 `已提测`，同步后必须重新验证。
+21. 将最新 `main` 同步到所有仍保留的 `dev/<version>`，优先使用 fast-forward；如果 fast-forward 失败，先确认是否存在重复补丁或历史分叉，再选择合并、删除或归档。如果该版本分支还处于 `开发中` 或 `已提测`，同步后必须重新验证。
 22. 对已经成功归档且不再继续开发的版本，可以删除或归档 `dev/<version>`；只要保留该分支，就不得让它落后于 `main`。
 
 如果本地 ops 工作区有未提交改动，或本地 `HEAD` 与配置的远程分支不一致，部署动作会失败。`SUB2API_ALLOW_DIRTY_DEPLOY=true` 仅用于明确批准的紧急本地上传。
