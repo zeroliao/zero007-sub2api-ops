@@ -464,10 +464,6 @@ yaml_single_quote() {
   printf '%s' "$1" | sed "s/'/''/g"
 }
 
-caddy_escape() {
-  printf '%s' "$1" | sed 's/[$\\]/\\&/g'
-}
-
 load_update_vpn_auth() {
   update_vpn_token="$(tr -d '\n' < "$DEPLOY_DIR/config/update-vpn-token" 2>/dev/null || true)"
   [ -n "$update_vpn_token" ] || fail "Missing update-vpn token file: $DEPLOY_DIR/config/update-vpn-token"
@@ -481,9 +477,6 @@ load_update_vpn_auth() {
   if printf '%s' "$update_vpn_basic_hash" | grep -q '[[:space:]]'; then
     fail "UPDATE_VPN_BASIC_AUTH_HASH must not contain whitespace."
   fi
-
-  update_vpn_token="$(caddy_escape "$update_vpn_token")"
-  update_vpn_basic_hash="$(caddy_escape "$update_vpn_basic_hash")"
 }
 
 write_caddyfile() {
