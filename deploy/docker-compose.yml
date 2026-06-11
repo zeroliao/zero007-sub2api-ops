@@ -184,6 +184,21 @@ services:
                 "type": "ws",
                 "path": "$${VPN_WS_TROJAN_PATH:-/trojan}"
               }
+            },
+            {
+              "type": "vmess",
+              "tag": "vmess-ws",
+              "listen": "0.0.0.0",
+              "listen_port": 18082,
+              "users": [
+                {
+                  "uuid": "$${VPN_WS_UUID}"
+                }
+              ],
+              "transport": {
+                "type": "ws",
+                "path": "$${VPN_WS_VMESS_PATH:-/vmess}"
+              }
             }
           ],
           "outbounds": [
