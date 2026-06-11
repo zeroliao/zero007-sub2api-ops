@@ -1,3 +1,30 @@
 :8080 {
-	reverse_proxy sub2api-blue:8080
+	handle /vless* {
+		reverse_proxy vpn-ws-node:18080
+	}
+
+	handle /trojan* {
+		reverse_proxy vpn-ws-node:18081
+	}
+
+	handle /vmess* {
+		reverse_proxy vpn-ws-node:18082
+	}
+
+	handle /api/update-vpn* {
+		respond "updateVpn API requires the generated production Caddyfile" 503
+	}
+
+	handle /updateVpn* {
+		respond "updateVpn UI requires the generated production Caddyfile" 503
+	}
+
+	@vpn_host host vpn.zero007.chat
+	handle @vpn_host {
+		respond "not found" 404
+	}
+
+	handle {
+		reverse_proxy sub2api-blue:8080
+	}
 }

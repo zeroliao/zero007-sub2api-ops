@@ -218,6 +218,7 @@ services:
       - VPN_WS_UUID=${VPN_WS_UUID:?VPN_WS_UUID is required}
       - VPN_WS_TROJAN_PASSWORD=${VPN_WS_TROJAN_PASSWORD:?VPN_WS_TROJAN_PASSWORD is required}
       - VPN_WS_VLESS_PATH=${VPN_WS_VLESS_PATH:-/vless}
+      - VPN_WS_VMESS_PATH=${VPN_WS_VMESS_PATH:-/vmess}
       - VPN_WS_TROJAN_PATH=${VPN_WS_TROJAN_PATH:-/trojan}
       - VPN_WS_LOG_LEVEL=${VPN_WS_LOG_LEVEL:-warn}
     networks:

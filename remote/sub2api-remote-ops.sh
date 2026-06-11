@@ -114,6 +114,10 @@ ensure_vpn_ws_env() {
     append_env_if_missing VPN_WS_VLESS_PATH /vless
     changed=1
   fi
+  if ! env_has_key VPN_WS_VMESS_PATH; then
+    append_env_if_missing VPN_WS_VMESS_PATH /vmess
+    changed=1
+  fi
   if ! env_has_key VPN_WS_TROJAN_PATH; then
     append_env_if_missing VPN_WS_TROJAN_PATH /trojan
     changed=1
@@ -460,10 +464,32 @@ yaml_single_quote() {
   printf '%s' "$1" | sed "s/'/''/g"
 }
 
+caddy_escape() {
+  printf '%s' "$1" | sed 's/[$\\]/\\&/g'
+}
+
+load_update_vpn_auth() {
+  update_vpn_token="$(tr -d '\n' < "$DEPLOY_DIR/config/update-vpn-token" 2>/dev/null || true)"
+  [ -n "$update_vpn_token" ] || fail "Missing update-vpn token file: $DEPLOY_DIR/config/update-vpn-token"
+
+  update_vpn_basic_user="${UPDATE_VPN_BASIC_AUTH_USER:-admin}"
+  printf '%s' "$update_vpn_basic_user" | grep -Eq '^[A-Za-z0-9._@-]+$' \
+    || fail "UPDATE_VPN_BASIC_AUTH_USER must contain only letters, numbers, '.', '_', '@' or '-'."
+
+  update_vpn_basic_hash="${UPDATE_VPN_BASIC_AUTH_HASH:-}"
+  [ -n "$update_vpn_basic_hash" ] || fail "Missing UPDATE_VPN_BASIC_AUTH_HASH in $DEPLOY_DIR/.env."
+  if printf '%s' "$update_vpn_basic_hash" | grep -q '[[:space:]]'; then
+    fail "UPDATE_VPN_BASIC_AUTH_HASH must not contain whitespace."
+  fi
+
+  update_vpn_token="$(caddy_escape "$update_vpn_token")"
+  update_vpn_basic_hash="$(caddy_escape "$update_vpn_basic_hash")"
+}
+
 write_caddyfile() {
   local slot="$1"
   local service subscription_path mobile_subscription_path subscription_file mobile_subscription_file node_server node_port node_method node_password
-  local vpn_ws_enabled vpn_ws_server vpn_ws_vless_path vpn_ws_trojan_path vpn_ws_uuid vpn_ws_trojan_password
+  local vpn_ws_enabled vpn_ws_server vpn_ws_vless_path vpn_ws_vmess_path vpn_ws_trojan_path vpn_ws_uuid vpn_ws_trojan_password update_vpn_token update_vpn_basic_user update_vpn_basic_hash
   service="$(slot_service "$slot")"
   mkdir -p "$DEPLOY_DIR/caddy"
   if [ -f "$DEPLOY_DIR/.env" ]; then
@@ -485,9 +511,11 @@ write_caddyfile() {
     vpn_ws_enabled="${VPN_WS_ENABLED:-true}"
     vpn_ws_server="${VPN_WS_SERVER:-vpn.zero007.chat}"
     vpn_ws_vless_path="${VPN_WS_VLESS_PATH:-/vless}"
+    vpn_ws_vmess_path="${VPN_WS_VMESS_PATH:-/vmess}"
     vpn_ws_trojan_path="${VPN_WS_TROJAN_PATH:-/trojan}"
     vpn_ws_uuid="${VPN_WS_UUID:-}"
     vpn_ws_trojan_password="$(yaml_single_quote "${VPN_WS_TROJAN_PASSWORD:-}")"
+    load_update_vpn_auth
     mkdir -p "$DEPLOY_DIR/caddy/subscriptions"
     subscription_file="$DEPLOY_DIR/caddy/subscriptions/${CLASH_SUBSCRIPTION_TOKEN}.yaml"
     mobile_subscription_file="$DEPLOY_DIR/caddy/subscriptions/${CLASH_SUBSCRIPTION_TOKEN}.mobile.yaml"
@@ -574,6 +602,27 @@ EOF
         Host: $vpn_ws_server
 EOF
     fi
+    if [ "$vpn_ws_enabled" = "true" ] && [ -n "$vpn_ws_uuid" ]; then
+      cat >> "$subscription_file" <<EOF
+  - name: zero007-vmess-ws-cf
+    type: vmess
+    server: $vpn_ws_server
+    port: 443
+    uuid: $vpn_ws_uuid
+    alterId: 0
+    cipher: auto
+    network: ws
+    tls: true
+    skip-cert-verify: false
+    client-fingerprint: chrome
+    udp: false
+    servername: $vpn_ws_server
+    ws-opts:
+      path: $vpn_ws_vmess_path
+      headers:
+        Host: $vpn_ws_server
+EOF
+    fi
     if [ "$vpn_ws_enabled" = "true" ] && [ -n "${VPN_WS_TROJAN_PASSWORD:-}" ]; then
       cat >> "$subscription_file" <<EOF
   - name: zero007-trojan-ws-cf
@@ -601,6 +650,11 @@ proxy-groups:
     proxies:
       - zero007-sub2api-ss
 EOF
+    if [ "$vpn_ws_enabled" = "true" ] && [ -n "$vpn_ws_uuid" ]; then
+      cat >> "$subscription_file" <<'EOF'
+      - zero007-vmess-ws-cf
+EOF
+    fi
     if [ "$vpn_ws_enabled" = "true" ] && [ -n "$vpn_ws_uuid" ]; then
       cat >> "$subscription_file" <<'EOF'
       - zero007-vless-ws-cf
@@ -682,6 +736,27 @@ EOF
         Host: $vpn_ws_server
 EOF
     fi
+    if [ "$vpn_ws_enabled" = "true" ] && [ -n "$vpn_ws_uuid" ]; then
+      cat >> "$mobile_subscription_file" <<EOF
+  - name: zero007-vmess-ws-cf
+    type: vmess
+    server: $vpn_ws_server
+    port: 443
+    uuid: $vpn_ws_uuid
+    alterId: 0
+    cipher: auto
+    network: ws
+    tls: true
+    skip-cert-verify: false
+    client-fingerprint: chrome
+    udp: false
+    servername: $vpn_ws_server
+    ws-opts:
+      path: $vpn_ws_vmess_path
+      headers:
+        Host: $vpn_ws_server
+EOF
+    fi
     if [ "$vpn_ws_enabled" = "true" ] && [ -n "${VPN_WS_TROJAN_PASSWORD:-}" ]; then
       cat >> "$mobile_subscription_file" <<EOF
   - name: zero007-trojan-ws-cf
@@ -709,6 +784,11 @@ proxy-groups:
     proxies:
       - zero007-sub2api-ss
 EOF
+    if [ "$vpn_ws_enabled" = "true" ] && [ -n "$vpn_ws_uuid" ]; then
+      cat >> "$mobile_subscription_file" <<'EOF'
+      - zero007-vmess-ws-cf
+EOF
+    fi
     if [ "$vpn_ws_enabled" = "true" ] && [ -n "$vpn_ws_uuid" ]; then
       cat >> "$mobile_subscription_file" <<'EOF'
       - zero007-vless-ws-cf
@@ -761,6 +841,10 @@ EOF
 		reverse_proxy vpn-ws-node:18081
 	}
 
+	handle $vpn_ws_vmess_path* {
+		reverse_proxy vpn-ws-node:18082
+	}
+
 	handle $subscription_path {
 		root * /srv/clash-subscriptions
 		rewrite * /${CLASH_SUBSCRIPTION_TOKEN}.yaml
@@ -772,6 +856,23 @@ EOF
 		root * /srv/clash-subscriptions
 		rewrite * /${CLASH_SUBSCRIPTION_TOKEN}.mobile.yaml
 		header Content-Type "text/yaml; charset=utf-8"
+		file_server
+	}
+
+	handle /api/update-vpn* {
+		basic_auth {
+			$update_vpn_basic_user $update_vpn_basic_hash
+		}
+		reverse_proxy 172.18.0.1:19091 {
+			header_up X-Update-Token $update_vpn_token
+		}
+	}
+
+	handle_path /updateVpn* {
+		basic_auth {
+			$update_vpn_basic_user $update_vpn_basic_hash
+		}
+		root * /srv/clash-subscriptions/updateVpn
 		file_server
 	}
 
@@ -788,6 +889,8 @@ EOF
     return
   fi
 
+  load_update_vpn_auth
+
   cat > "$DEPLOY_DIR/caddy/Caddyfile" <<EOF
 :8080 {
 	handle ${VPN_WS_VLESS_PATH:-/vless}* {
@@ -796,6 +899,27 @@ EOF
 
 	handle ${VPN_WS_TROJAN_PATH:-/trojan}* {
 		reverse_proxy vpn-ws-node:18081
+	}
+
+	handle ${VPN_WS_VMESS_PATH:-/vmess}* {
+		reverse_proxy vpn-ws-node:18082
+	}
+
+	handle /api/update-vpn* {
+		basic_auth {
+			$update_vpn_basic_user $update_vpn_basic_hash
+		}
+		reverse_proxy 172.18.0.1:19091 {
+			header_up X-Update-Token $update_vpn_token
+		}
+	}
+
+	handle_path /updateVpn* {
+		basic_auth {
+			$update_vpn_basic_user $update_vpn_basic_hash
+		}
+		root * /srv/clash-subscriptions/updateVpn
+		file_server
 	}
 
 	@vpn_host host ${VPN_WS_SERVER:-vpn.zero007.chat}
