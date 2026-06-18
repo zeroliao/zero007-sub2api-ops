@@ -8,5 +8,7 @@ backups/
 data/
 postgres_data/
 redis_data/
+caddy_data/
+caddy_config/
 .DS_Store
 Thumbs.db
