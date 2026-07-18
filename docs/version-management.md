@@ -47,6 +47,32 @@ v<version>
 - 包含上游同步的版本必须通过本地 Docker 验证和生产部署验证。
 - 如果上游代码导致问题，可回滚到上一个成功 tag，或 revert 该版本引入的上游同步提交。
 
+### 上游同步执行准则
+
+每次同步 upstream 时，必须按以下顺序执行，不得因上游变更规模大而扩大本地修改范围：
+
+1. 环境预检：
+   - 先读取 `go.mod`、`package.json` 和 lockfile，确认 Go、Node、包管理器和生成工具版本。
+   - 运行 Docker 验证前先用 `docker ps` 确认 daemon 可用；不可用时直接记录，不要反复尝试容器命令。
+   - 中国内地环境优先使用稳定可用源：GitHub fetch 优先 SSH，Go 显式使用 `GOPROXY=https://goproxy.cn,direct`，Node 显式使用 `https://registry.npmmirror.com`。除非依赖确实变化，不得因此改动 lockfile。
+2. 收敛冲突范围：
+   - merge 后立即使用 `git diff --name-only --diff-filter=U` 或等价命令列出冲突文件，并为每个文件记录“采用 upstream / 保留 fork / 合并双方”的决策和理由。
+   - 非冲突文件默认完整采用已经过 upstream 验证的代码；除非 production build 证明存在直接集成错误，不得修改、重构或为其扩大测试范围。
+   - 不要反复输出全量 `status`、完整大 diff 或对全部 upstream 归档运行 `diff --check`；检查范围应限制在冲突文件和本地适配文件。
+3. 冲突处理优先级：
+   - upstream 已重构或拆分架构时，以 upstream 结构为基线，只把 upstream 缺失的 fork 专属能力迁移到边界清晰的本地模块，不得恢复旧版大文件覆盖新架构。
+   - upstream 已将某个模型、alias、协议或配置作为一等能力支持时，默认保持 upstream 语义；没有明确业务需求和验证依据时，不得增加 fork 映射或隐藏替换。例如不得把 upstream 独立模型静默映射成另一个模型。
+   - 文档、生产运维约定和 fork 专属功能可以保留本地行为，但必须在版本记录中写明与 upstream 的差异、理由和风险。
+   - generated file 优先由生成器产生。先确认 upstream 的生成器基线可用；如果生成器因 upstream 自身的非冲突问题失败，只允许对现有 generated file 做本次冲突必需的最小适配，并记录未解决的生成风险，不得顺带修复无关 provider 或生成链路。
+4. 验证顺序：
+   - 先编译 production code，例如 `go build ./internal/service` 和 `go build ./cmd/server`，先排除真实集成错误。
+   - 再运行前端 `typecheck`。
+   - 然后只运行覆盖冲突文件和 fork 适配的 targeted tests；执行前确认测试命令参数确实只选择目标文件，避免误跑全量 suite。
+   - 全量 upstream tests、本地 Docker 和生产候选验证放在对应 release gate 执行；除非 production build 或 targeted tests 指向非冲突代码，否则不得在冲突处理阶段扩大修复范围。
+5. 失败与复盘：
+   - 同一工具或环境问题连续失败时，停止重复尝试，先重新判断目标、权限、镜像源和最小验证路径。
+   - 版本记录必须列出冲突文件、处理策略、保留的 fork 差异、验证命令、未验证项和已知风险，确保下次同步可以直接复用决策。
+
 ## 版本流程
 
 1. 创建版本：
@@ -115,19 +141,19 @@ v<version>
 
 每个节点完成后，必须留下可检查的完成信号，下一节点只根据这些信号继续：
 
-| 节点 | 完成信号 | 下一步 |
-| --- | --- | --- |
-| 创建版本 | 已按两个仓库分支/tag 和 `docs/releases/*.md` 计算全局版本号；版本号、涉及仓库、初始 commit/tag 已写入版本记录 | 创建对应 `dev/<version>` |
-| 开发完成 | `dev/<version>` 工作区干净，commit 已完成，测试结果已记录 | 同步到 `release/<version>` |
-| 源码 release 推送 | `sub2api-src/release/<version>` 已推送到 GitHub | 等待 `GHCR Image` workflow 完成 |
-| 候选镜像构建 | GitHub Actions `GHCR Image` 成功，Summary 输出 `ghcr.io/...@sha256:<digest>` | 将 digest 写入版本记录并更新 ops compose |
-| ops release 推送 | `sub2api/release/<version>` 已推送，compose 使用同一 digest | 有 Docker 的机器开始本地 Docker 验证 |
-| 本地 Docker 验证 | 版本记录写明验证机器、source commit、ops commit、digest 和验证结果 | 状态改为 `已提测`，执行服务器侧 `validate-candidate` |
-| 服务器候选验证 | `validate-candidate` 成功 | 执行 `backup` |
-| 备份 | 备份路径和时间写入版本记录 | 执行蓝绿部署 |
-| 部署 | 健康检查、日志检查、核心路径验证通过 | 状态改为 `成功`，合入 `main` 并打 tag |
-| 发布归档 | `release.yml` 成功，GitHub Release 已创建 | 如需要，运行 `Promote Verified Image` |
-| 镜像 tag 提升 | `Promote Verified Image` 成功，Summary 显示同一 digest 的版本 tag | 记录 tag，继续同步其它未完成版本 |
+| 节点              | 完成信号                                                                                                      | 下一步                                               |
+| ----------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| 创建版本          | 已按两个仓库分支/tag 和 `docs/releases/*.md` 计算全局版本号；版本号、涉及仓库、初始 commit/tag 已写入版本记录 | 创建对应 `dev/<version>`                             |
+| 开发完成          | `dev/<version>` 工作区干净，commit 已完成，测试结果已记录                                                     | 同步到 `release/<version>`                           |
+| 源码 release 推送 | `sub2api-src/release/<version>` 已推送到 GitHub                                                               | 等待 `GHCR Image` workflow 完成                      |
+| 候选镜像构建      | GitHub Actions `GHCR Image` 成功，Summary 输出 `ghcr.io/...@sha256:<digest>`                                  | 将 digest 写入版本记录并更新 ops compose             |
+| ops release 推送  | `sub2api/release/<version>` 已推送，compose 使用同一 digest                                                   | 有 Docker 的机器开始本地 Docker 验证                 |
+| 本地 Docker 验证  | 版本记录写明验证机器、source commit、ops commit、digest 和验证结果                                            | 状态改为 `已提测`，执行服务器侧 `validate-candidate` |
+| 服务器候选验证    | `validate-candidate` 成功                                                                                     | 执行 `backup`                                        |
+| 备份              | 备份路径和时间写入版本记录                                                                                    | 执行蓝绿部署                                         |
+| 部署              | 健康检查、日志检查、核心路径验证通过                                                                          | 状态改为 `成功`，合入 `main` 并打 tag                |
+| 发布归档          | `release.yml` 成功，GitHub Release 已创建                                                                     | 如需要，运行 `Promote Verified Image`                |
+| 镜像 tag 提升     | `Promote Verified Image` 成功，Summary 显示同一 digest 的版本 tag                                             | 记录 tag，继续同步其它未完成版本                     |
 
 如果任一节点失败，停止进入下一节点；先把失败原因写入版本记录，并根据影响选择修复、重试、取消或失败回滚。
 
