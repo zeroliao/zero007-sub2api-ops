@@ -1,5 +1,5 @@
 x-sub2api-app: &sub2api-app
-  image: ghcr.io/zeroliao/sub2api@sha256:3dd71ab671a64cd0a6b467b6fd854e339d43b964b7e3aeeee0cb263da7e5621a
+  image: ghcr.io/zeroliao/sub2api@sha256:251619af65cf997c66d60f078e92b19d668a7a9c19c63ec73eebe2bfb6eb907b
   restart: unless-stopped
   ulimits:
     nofile:
@@ -66,7 +66,17 @@ x-sub2api-app: &sub2api-app
   networks:
     - sub2api-network
   healthcheck:
-    test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
+    test:
+      [
+        "CMD",
+        "wget",
+        "-q",
+        "-T",
+        "5",
+        "-O",
+        "/dev/null",
+        "http://localhost:8080/health",
+      ]
     interval: 30s
     timeout: 10s
     retries: 3
@@ -132,7 +142,11 @@ services:
     networks:
       - sub2api-network
     healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/sing-box-clash-node.json && /usr/local/bin/sing-box check -c /tmp/sing-box-clash-node.json >/dev/null 2>&1"]
+      test:
+        [
+          "CMD-SHELL",
+          "test -f /tmp/sing-box-clash-node.json && /usr/local/bin/sing-box check -c /tmp/sing-box-clash-node.json >/dev/null 2>&1",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -224,7 +238,11 @@ services:
     networks:
       - sub2api-network
     healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/sing-box-vpn-ws-node.json && /usr/local/bin/sing-box check -c /tmp/sing-box-vpn-ws-node.json >/dev/null 2>&1"]
+      test:
+        [
+          "CMD-SHELL",
+          "test -f /tmp/sing-box-vpn-ws-node.json && /usr/local/bin/sing-box check -c /tmp/sing-box-vpn-ws-node.json >/dev/null 2>&1",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -244,7 +262,17 @@ services:
     networks:
       - sub2api-network
     healthcheck:
-      test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "-T",
+          "5",
+          "-O",
+          "/dev/null",
+          "http://localhost:8080/health",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -279,7 +307,11 @@ services:
     networks:
       - sub2api-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sub2api} -d ${POSTGRES_DB:-sub2api}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-sub2api} -d ${POSTGRES_DB:-sub2api}",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -296,12 +328,12 @@ services:
     volumes:
       - ./redis_data:/data
     command: >
-        sh -c '
-          redis-server
-          --save 60 1
-          --appendonly yes
-          --appendfsync everysec
-          --requirepass "$$REDIS_PASSWORD"'
+      sh -c '
+        redis-server
+        --save 60 1
+        --appendonly yes
+        --appendfsync everysec
+        --requirepass "$$REDIS_PASSWORD"'
     environment:
       - TZ=${TZ:-Asia/Shanghai}
       - REDISCLI_AUTH=${REDIS_PASSWORD:?REDIS_PASSWORD is required}
