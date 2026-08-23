@@ -1387,36 +1387,105 @@ sync_sidecar_proxies() {
   fi
 
   mkdir -p "$DEPLOY_DIR/sing-box"
-  local tmp_config tmp_rows tmp_ports target_config backup_config
+  local tmp_config tmp_rows tmp_nodes tmp_ready_nodes tmp_failed_nodes target_config backup_config
   tmp_config="$(mktemp /tmp/sub2api-sing-box-sidecar.XXXXXX.json)"
   tmp_rows="$(mktemp /tmp/sub2api-sing-box-sidecar.XXXXXX.tsv)"
-  tmp_ports="$(mktemp /tmp/sub2api-sing-box-sidecar.XXXXXX.ports)"
+  tmp_nodes="$(mktemp /tmp/sub2api-sing-box-sidecar.XXXXXX.nodes)"
+  tmp_ready_nodes="$(mktemp /tmp/sub2api-sing-box-sidecar.XXXXXX.ready)"
+  tmp_failed_nodes="$(mktemp /tmp/sub2api-sing-box-sidecar.XXXXXX.failed)"
   target_config="$DEPLOY_DIR/sing-box/config.json"
 
   compose exec -T postgres psql -U "${POSTGRES_USER:-sub2api}" -d "${POSTGRES_DB:-sub2api}" -At -F $'\t' <<'SQL' > "$tmp_rows"
-SELECT n.id, n.raw_uri, n.name, e.listen_port
-FROM proxy_subscription_nodes n
+SELECT s.id, n.id, n.raw_uri, n.name, e.listen_port
+FROM proxy_subscription_sources s
+JOIN proxy_subscription_nodes n ON n.source_id = s.id
 JOIN proxy_sidecar_endpoints e ON e.node_id = n.id AND e.deleted_at IS NULL
-WHERE n.deleted_at IS NULL
+WHERE s.deleted_at IS NULL
+  AND s.status = 'active'
+  AND n.deleted_at IS NULL
   AND n.selected = TRUE
   AND n.sidecar_required = TRUE
 ORDER BY e.listen_port, n.id;
 SQL
 
-  python3 - "$tmp_config" "$tmp_rows" "$tmp_ports" <<'PY'
+  python3 - "$tmp_config" "$tmp_rows" "$tmp_nodes" <<'PY'
 import json
+import os
 import sys
 import urllib.parse
 
 out_path = sys.argv[1]
 rows_path = sys.argv[2]
-ports_path = sys.argv[3]
+nodes_path = sys.argv[3]
 inbounds = []
 outbounds = [{"type": "direct", "tag": "direct"}]
 rules = []
 generated = 0
-generated_ports = []
+generated_nodes = []
 unsupported = {}
+seen_ports = set()
+
+def query_value(query, *names, default=""):
+    for name in names:
+        values = query.get(name)
+        if values and values[0] != "":
+            return values[0]
+    return default
+
+def build_outbound(node_id, raw_uri):
+    parsed = urllib.parse.urlsplit(raw_uri)
+    scheme = parsed.scheme.lower()
+    query = urllib.parse.parse_qs(parsed.query)
+    host = parsed.hostname or ""
+    try:
+        server_port = parsed.port or 443
+    except ValueError:
+        return None, "invalid-port"
+    user = urllib.parse.unquote(parsed.username or "")
+    if not host or not user:
+        return None, "missing-credentials"
+    if scheme == "anytls":
+        outbound = {"type": "anytls", "tag": f"node-{node_id}", "server": host, "server_port": server_port, "password": user}
+    elif scheme == "vless":
+        outbound = {"type": "vless", "tag": f"node-{node_id}", "server": host, "server_port": server_port, "uuid": user}
+        flow = query_value(query, "flow")
+        if flow:
+            outbound["flow"] = flow
+    elif scheme == "hysteria2":
+        outbound = {"type": "hysteria2", "tag": f"node-{node_id}", "server": host, "server_port": server_port, "password": user}
+    else:
+        return None, scheme or "unknown"
+    security = query_value(query, "security", default="tls").lower()
+    if security not in ("none", "false", "0"):
+        tls = {
+            "enabled": True,
+            "server_name": query_value(query, "sni", "servername", "server_name", default=host),
+            "insecure": query_value(query, "insecure", "allowInsecure", "skip-cert-verify", default="false").lower() in ("1", "true", "yes")
+        }
+        fingerprint = query_value(query, "fp", "fingerprint")
+        if fingerprint:
+            tls["utls"] = {"enabled": True, "fingerprint": fingerprint}
+        outbound["tls"] = tls
+    transport_type = query_value(query, "type", default="tcp").lower()
+    if scheme == "vless" and transport_type in ("ws", "websocket"):
+        transport = {"type": "ws"}
+        path = query_value(query, "path")
+        if path:
+            transport["path"] = urllib.parse.unquote(path)
+        host_header = query_value(query, "host")
+        if host_header:
+            transport["headers"] = {"Host": host_header}
+        outbound["transport"] = transport
+    elif scheme == "vless" and transport_type == "grpc":
+        outbound["transport"] = {"type": "grpc", "service_name": query_value(query, "serviceName", "service_name")}
+    elif scheme == "hysteria2":
+        obfs_type = query_value(query, "obfs")
+        obfs_password = query_value(query, "obfs-password", "obfs_password")
+        if obfs_type:
+            outbound["obfs"] = {"type": obfs_type}
+            if obfs_password:
+                outbound["obfs"]["password"] = obfs_password
+    return outbound, None
 
 with open(rows_path, "r", encoding="utf-8") as rows:
     for raw_line in rows:
@@ -1424,53 +1493,28 @@ with open(rows_path, "r", encoding="utf-8") as rows:
         if not line:
             continue
         try:
-            node_id, raw_uri, name, listen_port = line.split("\t", 3)
+            source_id, node_id, raw_uri, name, listen_port = line.split("\t", 4)
         except ValueError:
             continue
-        parsed = urllib.parse.urlsplit(raw_uri)
-        scheme = parsed.scheme.lower()
-        if scheme != "anytls":
-            unsupported[scheme or "unknown"] = unsupported.get(scheme or "unknown", 0) + 1
-            continue
-
-        host = parsed.hostname or ""
-        password = urllib.parse.unquote(parsed.username or "")
-        server_port = parsed.port or 443
         port = int(listen_port)
-        query = urllib.parse.parse_qs(parsed.query)
-        server_name = query.get("sni", query.get("servername", query.get("server_name", [host])))[0]
-        insecure_raw = query.get("insecure", query.get("allowInsecure", query.get("skip-cert-verify", ["false"])))[0]
-        insecure = str(insecure_raw).lower() in ("1", "true", "yes")
-        if not host or not password:
-            unsupported["invalid-anytls"] = unsupported.get("invalid-anytls", 0) + 1
+        if port in seen_ports:
+            raise RuntimeError(f"duplicate listen port generated: {port}")
+        outbound, error = build_outbound(node_id, raw_uri)
+        if outbound is None:
+            unsupported[error or "unknown"] = unsupported.get(error or "unknown", 0) + 1
             continue
 
         inbound_tag = f"in-{port}"
-        outbound_tag = f"node-{node_id}"
         inbounds.append({
             "type": "socks",
             "tag": inbound_tag,
             "listen": "0.0.0.0",
             "listen_port": port
         })
-        outbound = {
-            "type": "anytls",
-            "tag": outbound_tag,
-            "server": host,
-            "server_port": server_port,
-            "password": password,
-            "tls": {
-                "enabled": True,
-                "server_name": server_name,
-                "insecure": insecure
-            }
-        }
-        fingerprint = query.get("fp", query.get("fingerprint", [""]))[0]
-        if fingerprint:
-            outbound["tls"]["utls"] = {"enabled": True, "fingerprint": fingerprint}
         outbounds.append(outbound)
-        rules.append({"inbound": [inbound_tag], "outbound": outbound_tag})
-        generated_ports.append(str(port))
+        rules.append({"inbound": [inbound_tag], "outbound": outbound["tag"]})
+        generated_nodes.append(str(node_id))
+        seen_ports.add(port)
         generated += 1
 
 config = {
@@ -1479,10 +1523,31 @@ config = {
     "outbounds": outbounds,
     "route": {"rules": rules, "final": "direct"}
 }
+if generated_nodes:
+    outbound_tags = [outbound["tag"] for outbound in outbounds if outbound.get("tag", "").startswith("node-")]
+    gateway_port = int(os.environ.get("SUB2API_SIDECAR_GATEWAY_PORT", "32000"))
+    outbounds.append({
+        "type": "urltest",
+        "tag": "fetchgithub-gateway",
+        "outbounds": outbound_tags,
+        "url": "https://www.gstatic.com/generate_204",
+        "interval": "5m",
+        "tolerance": 50
+    })
+    config["inbounds"].append({
+        "type": "socks",
+        "tag": "in-fetchgithub-gateway",
+        "listen": "0.0.0.0",
+        "listen_port": gateway_port
+    })
+    config["route"]["rules"].insert(0, {
+        "inbound": ["in-fetchgithub-gateway"],
+        "outbound": "fetchgithub-gateway"
+    })
 with open(out_path, "w", encoding="utf-8") as f:
     json.dump(config, f, ensure_ascii=False, indent=2)
-with open(ports_path, "w", encoding="utf-8") as f:
-    f.write("\n".join(generated_ports))
+with open(nodes_path, "w", encoding="utf-8") as f:
+    f.write("\n".join(generated_nodes))
 print(f"generated={generated}")
 if unsupported:
     print("unsupported=" + ",".join(f"{k}:{v}" for k, v in sorted(unsupported.items())))
@@ -1505,8 +1570,64 @@ PY
   compose restart sing-box
   wait_for_service_health sing-box 12 3 || fail "sing-box failed health check after sidecar config sync."
 
-  log "Marking generated sidecar endpoints active."
-  compose exec -T postgres psql -U "${POSTGRES_USER:-sub2api}" -d "${POSTGRES_DB:-sub2api}" -v ON_ERROR_STOP=1 -v generated_ports="$(paste -sd, "$tmp_ports")" <<'SQL'
+  log "Probing generated sidecar SOCKS endpoints through their loopback bindings."
+  while IFS=$'\t' read -r node_id listen_port; do
+    [ -n "$node_id" ] || continue
+    probe_ok=0
+    for probe_url in \
+      "https://api64.ipify.org?format=json" \
+      "https://api.ipify.org?format=json"; do
+      probe_body="$(curl -fsS --connect-timeout 8 --max-time 20 \
+        --socks5-hostname "127.0.0.1:${listen_port}" "$probe_url" 2>/dev/null || true)"
+      if printf '%s' "$probe_body" |
+        grep -Eq '"ip"[[:space:]]*:[[:space:]]*"[^"[:space:]]+'; then
+        probe_ok=1
+        break
+      fi
+    done
+    if [ "$probe_ok" -eq 1 ]; then
+      printf '%s\n' "$node_id" >> "$tmp_ready_nodes"
+      log "Sidecar endpoint node=$node_id port=$listen_port egress probe passed."
+    else
+      printf '%s\n' "$node_id" >> "$tmp_failed_nodes"
+      log "Sidecar endpoint node=$node_id port=$listen_port egress probe failed."
+    fi
+  done < <(
+    compose exec -T postgres psql -qAt -F $'\t' -U "${POSTGRES_USER:-sub2api}" -d "${POSTGRES_DB:-sub2api}" \
+      -v generated_nodes="$(paste -sd, "$tmp_nodes")" <<'SQL'
+SELECT e.node_id, e.listen_port
+FROM proxy_sidecar_endpoints e
+JOIN proxy_subscription_nodes n ON n.id = e.node_id
+JOIN proxy_subscription_sources s ON s.id = n.source_id
+WHERE e.deleted_at IS NULL
+  AND s.deleted_at IS NULL
+  AND s.status = 'active'
+  AND n.deleted_at IS NULL
+  AND n.selected = TRUE
+  AND n.sidecar_required = TRUE
+  AND e.node_id = ANY(COALESCE(string_to_array(NULLIF(:'generated_nodes', ''), ',')::bigint[], ARRAY[]::bigint[]))
+ORDER BY e.listen_port, e.node_id;
+SQL
+  )
+
+  log "Reconciling generated sidecar endpoint states."
+  compose exec -T postgres psql -U "${POSTGRES_USER:-sub2api}" -d "${POSTGRES_DB:-sub2api}" -v ON_ERROR_STOP=1 \
+    -v generated_nodes="$(paste -sd, "$tmp_nodes")" \
+    -v ready_nodes="$(paste -sd, "$tmp_ready_nodes")" \
+    -v failed_nodes="$(paste -sd, "$tmp_failed_nodes")" <<'SQL'
+UPDATE proxies p
+SET status = 'disabled',
+    quality_status = 'failed',
+    last_checked_at = NOW(),
+    updated_at = NOW()
+FROM proxy_sidecar_endpoints e
+JOIN proxy_subscription_nodes n ON n.id = e.node_id
+JOIN proxy_subscription_sources s ON s.id = n.source_id
+WHERE e.proxy_id = p.id
+  AND e.deleted_at IS NULL
+  AND (s.deleted_at IS NOT NULL OR s.status <> 'active' OR n.deleted_at IS NOT NULL OR n.selected <> TRUE
+       OR e.node_id <> ALL(COALESCE(string_to_array(NULLIF(:'generated_nodes', ''), ',')::bigint[], ARRAY[]::bigint[])));
+
 UPDATE proxy_sidecar_endpoints e
 SET status = 'ready',
     last_checked_at = NOW(),
@@ -1515,28 +1636,51 @@ SET status = 'ready',
     updated_at = NOW()
 FROM proxy_subscription_nodes n
 WHERE e.node_id = n.id
-  AND e.listen_port = ANY(string_to_array(:'generated_ports', ',')::int[])
   AND e.deleted_at IS NULL
   AND n.deleted_at IS NULL
   AND n.selected = TRUE
   AND n.sidecar_required = TRUE
-  AND n.protocol = 'anytls';
+  AND e.node_id = ANY(COALESCE(string_to_array(NULLIF(:'ready_nodes', ''), ',')::bigint[], ARRAY[]::bigint[]));
 
 UPDATE proxies p
-SET host = 'sing-box',
-    status = 'active',
+SET status = 'active',
+    quality_status = CASE WHEN p.quality_status = 'failed' THEN 'degraded' ELSE p.quality_status END,
     last_checked_at = NOW(),
     updated_at = NOW()
 FROM proxy_sidecar_endpoints e
-JOIN proxy_subscription_nodes n ON n.id = e.node_id
 WHERE e.proxy_id = p.id
-  AND e.listen_port = ANY(string_to_array(:'generated_ports', ',')::int[])
   AND e.deleted_at IS NULL
-  AND n.deleted_at IS NULL
-  AND n.selected = TRUE
-  AND n.sidecar_required = TRUE
-  AND n.protocol = 'anytls'
-  AND p.proxy_type = 'sidecar';
+  AND e.node_id = ANY(COALESCE(string_to_array(NULLIF(:'ready_nodes', ''), ',')::bigint[], ARRAY[]::bigint[]));
+
+UPDATE proxy_sidecar_endpoints e
+SET status = 'inactive',
+    last_checked_at = NOW(),
+    last_error = 'sidecar proxy egress probe failed after config generation',
+    updated_at = NOW()
+WHERE e.deleted_at IS NULL
+  AND e.node_id = ANY(COALESCE(string_to_array(NULLIF(:'failed_nodes', ''), ',')::bigint[], ARRAY[]::bigint[]));
+
+UPDATE proxies p
+SET status = 'disabled',
+    quality_status = 'failed',
+    last_checked_at = NOW(),
+    updated_at = NOW()
+FROM proxy_sidecar_endpoints e
+WHERE e.proxy_id = p.id
+  AND e.deleted_at IS NULL
+  AND e.node_id = ANY(COALESCE(string_to_array(NULLIF(:'failed_nodes', ''), ',')::bigint[], ARRAY[]::bigint[]));
+
+UPDATE proxy_sidecar_endpoints e
+SET status = 'inactive',
+    last_checked_at = NOW(),
+    last_error = 'sidecar node was not generated by the active runtime config',
+    updated_at = NOW()
+FROM proxy_subscription_nodes n
+JOIN proxy_subscription_sources s ON s.id = n.source_id
+WHERE e.node_id = n.id
+  AND e.deleted_at IS NULL
+  AND (s.deleted_at IS NOT NULL OR s.status <> 'active' OR n.deleted_at IS NOT NULL OR n.selected <> TRUE
+       OR e.node_id <> ALL(COALESCE(string_to_array(NULLIF(:'generated_nodes', ''), ',')::bigint[], ARRAY[]::bigint[])));
 
 SELECT 'sidecar_endpoint|' || e.listen_port || '|' || e.status || '|' || p.host || '|' || p.status
 FROM proxy_sidecar_endpoints e
@@ -1544,7 +1688,7 @@ JOIN proxies p ON p.id = e.proxy_id
 WHERE e.deleted_at IS NULL
 ORDER BY e.listen_port;
 SQL
-  rm -f "$tmp_rows" "$tmp_ports"
+  rm -f "$tmp_rows" "$tmp_nodes" "$tmp_ready_nodes" "$tmp_failed_nodes"
 
   log "Sidecar proxy sync completed."
 }

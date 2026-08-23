@@ -90,6 +90,9 @@ services:
     volumes:
       - ./sing-box/config.json:/etc/sing-box/config.json:ro
     command: ["run", "-c", "/etc/sing-box/config.json"]
+    ports:
+      - "127.0.0.1:31000-31999:31000-31999"
+      - "127.0.0.1:${SUB2API_SIDECAR_GATEWAY_PORT:-32000}:32000"
     networks:
       - sub2api-network
 
