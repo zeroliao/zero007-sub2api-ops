@@ -1,5 +1,5 @@
 x-sub2api-app: &sub2api-app
-  image: ghcr.io/zeroliao/sub2api@sha256:40e034be4d7d77a511262fc8ed1f904faf9c66c98f5cd3d610c59ba9df20a09b
+  image: ghcr.io/zeroliao/sub2api@sha256:a230691891af18d22a1a93fdb0adba019b4fa5811423c7d35b232e8fc1dc6312
   restart: unless-stopped
   ulimits:
     nofile:
