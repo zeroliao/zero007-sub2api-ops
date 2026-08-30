@@ -265,14 +265,33 @@ validate_image_pins() {
 
 validate_image_digests() {
   local file="$1"
-  local config service image resolved
+  local config service image resolved expected_digest expected_repository resolved_digest resolved_repository resolved_match normalized_expected normalized_resolved
 
   validate_image_pins "$file"
   config="$(compose_file "$file" --profile bluegreen config)"
   while IFS='|' read -r service image; do
     [ -n "${image:-}" ] || continue
     resolved="$(docker image inspect "$image" --format '{{range .RepoDigests}}{{println .}}{{end}}' 2>/dev/null || true)"
-    if ! printf '%s\n' "$resolved" | grep -Fxq "$image"; then
+    expected_digest="${image##*@}"
+    expected_repository="${image%@*}"
+    if [[ "${expected_repository##*/}" == *:* ]]; then
+      expected_repository="${expected_repository%:*}"
+    fi
+    normalized_expected="${expected_repository#docker.io/}"
+    normalized_expected="${normalized_expected#library/}"
+    resolved_match=0
+    while IFS= read -r resolved_repository; do
+      [ -n "$resolved_repository" ] || continue
+      resolved_digest="${resolved_repository##*@}"
+      resolved_repository="${resolved_repository%@*}"
+      normalized_resolved="${resolved_repository#docker.io/}"
+      normalized_resolved="${normalized_resolved#library/}"
+      if [[ "$resolved_digest" == "$expected_digest" && ( "$resolved_repository" == "$expected_repository" || "$normalized_resolved" == "$normalized_expected" ) ]]; then
+        resolved_match=1
+        break
+      fi
+    done <<< "$resolved"
+    if [ "$resolved_match" -ne 1 ]; then
       log "Service '$service' did not resolve to the exact configured image digest: $image"
       fail "Exact image digest validation failed. Pull the candidate image and retry."
     fi
