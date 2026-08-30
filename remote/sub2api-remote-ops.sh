@@ -236,7 +236,7 @@ validate_image_pins() {
       *) continue ;;
     esac
 
-    if [ "${image#*@sha256:}" = "$image" ]; then
+    if [[ ! "$image" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
       log "Service '$service' image is not pinned by digest: $image"
       missing=1
     fi
@@ -261,6 +261,33 @@ validate_image_pins() {
   [ "$found_vpn_ws_node" -eq 1 ] || { log "Missing compose service image: vpn-ws-node"; missing=1; }
 
   [ "$missing" -eq 0 ] || fail "Compose image pin validation failed."
+}
+
+validate_image_digests() {
+  local file="$1"
+  local config service image resolved
+
+  validate_image_pins "$file"
+  config="$(compose_file "$file" --profile bluegreen config)"
+  while IFS='|' read -r service image; do
+    [ -n "${image:-}" ] || continue
+    resolved="$(docker image inspect "$image" --format '{{range .RepoDigests}}{{println .}}{{end}}' 2>/dev/null || true)"
+    if ! printf '%s\n' "$resolved" | grep -Fxq "$image"; then
+      log "Service '$service' did not resolve to the exact configured image digest: $image"
+      fail "Exact image digest validation failed. Pull the candidate image and retry."
+    fi
+  done < <(
+    printf '%s\n' "$config" | awk '
+      /^[[:space:]]{2}[A-Za-z0-9_.-]+:$/ {
+        service=$1
+        sub(":", "", service)
+      }
+      /^[[:space:]]{4}image:/ {
+        print service "|" $2
+      }
+    '
+  )
+  log "Exact image digest validation passed: $file"
 }
 
 compose_service_image() {
@@ -413,7 +440,8 @@ validate_candidate_compose() {
   validate_env
   [ -f "$CANDIDATE_COMPOSE" ] || fail "Candidate compose file was not found: $CANDIDATE_COMPOSE"
   compose_file "$CANDIDATE_COMPOSE" config >/dev/null
-  validate_image_pins "$CANDIDATE_COMPOSE"
+  compose_file "$CANDIDATE_COMPOSE" --profile bluegreen pull
+  validate_image_digests "$CANDIDATE_COMPOSE"
   validate_destructive_migrations
   log "Candidate compose validation passed: $CANDIDATE_COMPOSE"
 }
@@ -1092,6 +1120,7 @@ deploy() {
 
   log "Pulling latest images."
   compose pull
+  validate_image_digests "$COMPOSE_FILE"
   validate_image_migrations "$COMPOSE_FILE"
 
   log "Starting services."
@@ -1129,6 +1158,7 @@ bluegreen_deploy() {
 
   log "Pulling latest images."
   compose --profile bluegreen pull
+  validate_image_digests "$COMPOSE_FILE"
   validate_image_migrations "$COMPOSE_FILE"
 
   local target target_service previous
@@ -1268,7 +1298,7 @@ EOF
 
   (
     cd "$run_dir"
-    nohup bash "$run_dir/runner.sh" >/dev/null 2>&1 &
+    nohup setsid bash "$run_dir/runner.sh" </dev/null >/dev/null 2>&1 &
     printf '%s\n' "$!" > "$run_dir/pid"
   )
 

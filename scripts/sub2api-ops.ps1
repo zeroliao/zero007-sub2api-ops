@@ -238,8 +238,8 @@ if ([string]::IsNullOrWhiteSpace($gitExe)) {
 }
 
 $target = "${userName}@${hostName}"
-$sshBase = @("ssh", "-p", $port, "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3")
-$scpBase = @("scp", "-P", $port)
+$sshBase = @("ssh", "-p", $port, "-o", "ConnectTimeout=15", "-o", "TCPKeepAlive=yes", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "-o", "RequestTTY=no")
+$scpBase = @("scp", "-P", $port, "-o", "ConnectTimeout=15", "-o", "TCPKeepAlive=yes")
 
 if (-not [string]::IsNullOrWhiteSpace($sshKey)) {
   $sshBase += @("-i", $sshKey)
